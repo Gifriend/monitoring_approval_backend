@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+enum Role {
+  Manager
+  Consultant
+  Engineer
+  Vendor
+}
+
+enum Status {
+  submitted
+  inReviewConsultant
+  inReviewEngineering
+  approved
+  approvedWithNotes
+  returnForCorrection
+  rejected
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  name      String?
+  password  String
+  role      Role
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  submittedDocuments Document[] @relation("SubmittedDocs")
+  reviewedDocuments  Document[] @relation("ReviewedDocs")
+  approvals          Approval[]
+}
+
+model Document {
+  id             Int       @id @default(autoincrement())
+  name           String
+  filePath       String
+  status         Status    @default(submitted)
+
+  submittedBy    User      @relation("SubmittedDocs", fields: [submittedById], references: [id])
+  submittedById  Int
+
+  reviewedBy     User?     @relation("ReviewedDocs", fields: [reviewedById], references: [id])
+  reviewedById   Int?
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  approvals      Approval[]
+}
+
+model Approval {
+  id           Int       @id @default(autoincrement())
+  document     Document  @relation(fields: [documentId], references: [id])
+  documentId   Int
+
+  approvedBy   User      @relation(fields: [approvedById], references: [id])
+  approvedById Int
+
+  status       Status
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
