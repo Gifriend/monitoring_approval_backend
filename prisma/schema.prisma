@@ -6,16 +6,16 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
 enum Role {
   Manager
-  Consultant
+  Dalkon
   Engineer
   Vendor
 }
@@ -28,7 +28,14 @@ enum Status {
   approvedWithNotes
   returnForCorrection
   rejected
+  overdue 
 }
+
+enum ApprovalType {
+  protection
+  civil
+}
+
 
 model User {
   id        Int       @id @default(autoincrement())
@@ -38,10 +45,21 @@ model User {
   role      Role
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
+  refreshToken String?   
 
   submittedDocuments Document[] @relation("SubmittedDocs")
   reviewedDocuments  Document[] @relation("ReviewedDocs")
   approvals          Approval[]
+
+  @@index([email, role]) 
+}
+model Contract {
+  id             Int       @id @default(autoincrement())
+  contractNumber String    @unique 
+  contractDate   DateTime
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  documents      Document[] 
 }
 
 model Document {
@@ -49,29 +67,38 @@ model Document {
   name           String
   filePath       String
   status         Status    @default(submitted)
-
+  overallDeadline DateTime? 
+  documentType   ApprovalType? 
+  contract       Contract? @relation(fields: [contractId], references: [id]) 
+  contractId     Int?
   submittedBy    User      @relation("SubmittedDocs", fields: [submittedById], references: [id])
   submittedById  Int
-
   reviewedBy     User?     @relation("ReviewedDocs", fields: [reviewedById], references: [id])
   reviewedById   Int?
-
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-
   approvals      Approval[]
+
+  @@index([status, overallDeadline])
+  @@index([submittedById, createdAt])
+  @@index([contractId]) 
 }
 
 model Approval {
   id           Int       @id @default(autoincrement())
   document     Document  @relation(fields: [documentId], references: [id])
   documentId   Int
-
+  type         ApprovalType
   approvedBy   User      @relation(fields: [approvedById], references: [id])
   approvedById Int
 
   status       Status
   notes        String?
+  deadline     DateTime  
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+
+  @@index([documentId, deadline]) 
+  @@index([approvedById, deadline]) 
+  @@index([status, deadline]) 
 }
