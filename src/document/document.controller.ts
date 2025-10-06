@@ -1,34 +1,83 @@
-import { 
-  Controller, Post, Patch, Body, Param, UseGuards, Request, HttpCode, HttpStatus 
+import {
+  Controller,
+  Post,
+  Patch,
+  Body,
+  Param,
+  UseGuards,
+  Request,
+  HttpCode,
+  HttpStatus,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
 import { JwtAuthGuard } from '../auth/strategy/jwt-auth.guard';
 import { ApprovalType } from '@prisma/client';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
 
 @Controller('documents')
 @UseGuards(JwtAuthGuard)
 export class DocumentController {
   constructor(private readonly documentService: DocumentService) {}
 
-  @Post()
+  // === UPLOAD & SUBMIT DOKUMEN ===
+  @Post('submit')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: './uploads', // folder tempat file disimpan
+        filename: (req, file, callback) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const ext = extname(file.originalname);
+          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+        },
+      }),
+    }),
+  )
   @HttpCode(HttpStatus.CREATED)
   async submit(
     @Request() req,
-    @Body() body: { name: string; filePath: string; contractId?: number; documentType: string }
+    @Body() body: { name: string; contractId?: number; documentType: string },
+    @UploadedFile() file: Express.Multer.File,
   ) {
-    // Ensure documentType is of type ApprovalType
+    const filePath = `uploads/${file.filename}`;
     return this.documentService.submit(req.user.id, {
-      ...body,
+      name: body.name,
+      filePath,
+      contractId: body.contractId,
       documentType: body.documentType as ApprovalType,
     });
   }
 
-  @Patch(':id/dalkon-review')
-  async dalkonReview(
+  // === RESUBMIT (upload ulang file revisi) ===
+  @Patch(':id/resubmit')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: './uploads',
+        filename: (req, file, callback) => {
+          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const ext = extname(file.originalname);
+          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+        },
+      }),
+    }),
+  )
+  async resubmit(
     @Request() req,
     @Param('id') id: number,
-    @Body() body: { action: string }
+    @UploadedFile() file: Express.Multer.File,
   ) {
+    const filePath = `uploads/${file.filename}`;
+    return this.documentService.resubmit(req.user.id, +id, filePath);
+  }
+
+  // === REVIEW HANDLERS (tetap sama) ===
+  @Patch(':id/dalkon-review')
+  async dalkonReview(@Request() req, @Param('id') id: number, @Body() body: { action: string }) {
     return this.documentService.dalkonReview(req.user, +id, body.action);
   }
 
@@ -36,26 +85,13 @@ export class DocumentController {
   async engineeringReview(
     @Request() req,
     @Param('id') id: number,
-    @Body() body: { action: string; notes?: string }
+    @Body() body: { action: string; notes?: string },
   ) {
     return this.documentService.engineeringReview(req.user, +id, body.action, body.notes);
   }
 
   @Patch(':id/manager-review')
-  async managerReview(
-    @Request() req,
-    @Param('id') id: number,
-    @Body() body: { action: string }
-  ) {
+  async managerReview(@Request() req, @Param('id') id: number, @Body() body: { action: string }) {
     return this.documentService.managerReview(req.user, +id, body.action);
-  }
-
-  @Patch(':id/resubmit')
-  async resubmit(
-    @Request() req,
-    @Param('id') id: number,
-    @Body() body: { filePath: string }
-  ) {
-    return this.documentService.resubmit(req.user.id, +id, body.filePath);
   }
 }
