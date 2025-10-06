@@ -10,6 +10,7 @@ import {
   HttpStatus,
   UploadedFile,
   UseInterceptors,
+  Get,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
@@ -30,7 +31,8 @@ export class DocumentController {
       storage: diskStorage({
         destination: './uploads', // folder tempat file disimpan
         filename: (req, file, callback) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const uniqueSuffix =
+            Date.now() + '-' + Math.round(Math.random() * 1e9);
           const ext = extname(file.originalname);
           callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
         },
@@ -59,7 +61,8 @@ export class DocumentController {
       storage: diskStorage({
         destination: './uploads',
         filename: (req, file, callback) => {
-          const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const uniqueSuffix =
+            Date.now() + '-' + Math.round(Math.random() * 1e9);
           const ext = extname(file.originalname);
           callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
         },
@@ -77,7 +80,11 @@ export class DocumentController {
 
   // === REVIEW HANDLERS (tetap sama) ===
   @Patch(':id/dalkon-review')
-  async dalkonReview(@Request() req, @Param('id') id: number, @Body() body: { action: string }) {
+  async dalkonReview(
+    @Request() req,
+    @Param('id') id: number,
+    @Body() body: { action: string },
+  ) {
     return this.documentService.dalkonReview(req.user, +id, body.action);
   }
 
@@ -87,11 +94,26 @@ export class DocumentController {
     @Param('id') id: number,
     @Body() body: { action: string; notes?: string },
   ) {
-    return this.documentService.engineeringReview(req.user, +id, body.action, body.notes);
+    return this.documentService.engineeringReview(
+      req.user,
+      +id,
+      body.action,
+      body.notes,
+    );
   }
 
   @Patch(':id/manager-review')
-  async managerReview(@Request() req, @Param('id') id: number, @Body() body: { action: string }) {
+  async managerReview(
+    @Request() req,
+    @Param('id') id: number,
+    @Body() body: { action: string },
+  ) {
     return this.documentService.managerReview(req.user, +id, body.action);
+  }
+
+  // === GET HISTORY DOKUMEN ===
+  @Get('history')
+  async getHistory(@Request() req) {
+    return this.documentService.getHistory(req.user);
   }
 }

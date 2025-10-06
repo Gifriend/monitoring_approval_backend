@@ -4,109 +4,88 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
-  // Hash default password
   const passwordHash = await bcrypt.hash('password123', 10);
 
-  // 1. Seed Users
+  // === USERS ===
   const [manager, dalkon, engineer, vendor] = await Promise.all([
     prisma.user.upsert({
       where: { email: 'manager@example.com' },
       update: {},
-      create: {
-        email: 'manager@example.com',
-        name: 'John Manager',
-        password: passwordHash,
-        role: Role.Manager,
-      },
+      create: { email: 'manager@example.com', name: 'John Manager', password: passwordHash, role: Role.Manager },
     }),
     prisma.user.upsert({
       where: { email: 'dalkon@example.com' },
       update: {},
-      create: {
-        email: 'dalkon@example.com',
-        name: 'Jane Dalkon',
-        password: passwordHash,
-        role: Role.Dalkon,
-      },
+      create: { email: 'dalkon@example.com', name: 'Jane Dalkon', password: passwordHash, role: Role.Dalkon },
     }),
     prisma.user.upsert({
       where: { email: 'engineer@example.com' },
       update: {},
-      create: {
-        email: 'engineer@example.com',
-        name: 'Bob Engineer',
-        password: passwordHash,
-        role: Role.Engineer,
-      },
+      create: { email: 'engineer@example.com', name: 'Bob Engineer', password: passwordHash, role: Role.Engineer },
     }),
     prisma.user.upsert({
       where: { email: 'vendor@example.com' },
       update: {},
-      create: {
-        email: 'vendor@example.com',
-        name: 'Alice Vendor',
-        password: passwordHash,
-        role: Role.Vendor,
-      },
+      create: { email: 'vendor@example.com', name: 'Alice Vendor', password: passwordHash, role: Role.Vendor },
     }),
   ]);
 
-  // 2. Seed Contracts
+  // === CONTRACTS ===
   const [contract1, contract2] = await Promise.all([
     prisma.contract.create({
-      data: {
-        contractNumber: 'CONTRACT-001',
-        contractDate: new Date('2025-01-01'),
-      },
+      data: { contractNumber: 'CONTRACT-001', contractDate: new Date('2025-01-01') },
     }),
     prisma.contract.create({
-      data: {
-        contractNumber: 'CONTRACT-002',
-        contractDate: new Date('2025-02-01'),
-      },
+      data: { contractNumber: 'CONTRACT-002', contractDate: new Date('2025-02-01') },
     }),
   ]);
 
-  // 3. Seed Documents
+  // === DOCUMENTS ===
   const [doc1, doc2, doc3] = await Promise.all([
     prisma.document.create({
       data: {
-        name: 'Protection Plan Document',
-        filePath: '/uploads/protection_plan.pdf',
+        name: 'Protection Plan v1',
+        filePath: '/uploads/protection_plan_v1.pdf',
+        version: 1,
         status: Status.submitted,
         overallDeadline: new Date('2025-10-15'),
         documentType: ApprovalType.protection,
         contractId: contract1.id,
         submittedById: vendor.id,
+        remarks: 'Initial submission',
       },
     }),
     prisma.document.create({
       data: {
-        name: 'Civil Blueprint',
-        filePath: '/uploads/civil_blueprint.pdf',
+        name: 'Civil Blueprint v1',
+        filePath: '/uploads/civil_blueprint_v1.pdf',
+        version: 1,
         status: Status.inReviewConsultant,
         overallDeadline: new Date('2025-10-20'),
         documentType: ApprovalType.civil,
         contractId: contract2.id,
         submittedById: vendor.id,
         reviewedById: dalkon.id,
+        remarks: 'Awaiting Dalkon review',
       },
     }),
     prisma.document.create({
       data: {
-        name: 'Safety Guidelines',
-        filePath: '/uploads/safety_guidelines.pdf',
+        name: 'Safety Guidelines v2',
+        filePath: '/uploads/safety_guidelines_v2.pdf',
+        version: 2,
         status: Status.approved,
         overallDeadline: new Date('2025-09-30'),
         documentType: ApprovalType.protection,
         contractId: contract1.id,
         submittedById: vendor.id,
         reviewedById: engineer.id,
+        remarks: 'Revised and approved',
       },
     }),
   ]);
 
-  // 4. Seed Approvals
+  // === APPROVALS ===
   await Promise.all([
     prisma.approval.create({
       data: {

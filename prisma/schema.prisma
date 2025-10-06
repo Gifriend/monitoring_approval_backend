@@ -29,7 +29,7 @@ enum Status {
   approvedWithNotes
   returnForCorrection
   rejected
-  overdue 
+  overdue
 }
 
 enum ApprovalType {
@@ -37,70 +37,72 @@ enum ApprovalType {
   civil
 }
 
-
 model User {
-  id        Int       @id @default(autoincrement())
-  email     String    @unique
-  name      String?
-  password  String
-  role      Role
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  refreshToken String?   
+  id               Int         @id @default(autoincrement())
+  email            String      @unique
+  name             String?
+  password         String
+  role             Role
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  refreshToken     String?
 
   submittedDocuments Document[] @relation("SubmittedDocs")
   reviewedDocuments  Document[] @relation("ReviewedDocs")
   approvals          Approval[]
 
-  @@index([email, role]) 
+  @@index([email, role])
 }
+
 model Contract {
-  id             Int       @id @default(autoincrement())
-  contractNumber String    @unique 
+  id             Int         @id @default(autoincrement())
+  contractNumber String      @unique
   contractDate   DateTime
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  documents      Document[] 
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  documents      Document[]
 }
 
 model Document {
-  id             Int       @id @default(autoincrement())
-  name           String
-  filePath       String
-  status         Status    @default(submitted)
-  overallDeadline DateTime? 
-  documentType   ApprovalType? 
-  contract       Contract? @relation(fields: [contractId], references: [id]) 
-  contractId     Int?
-  submittedBy    User      @relation("SubmittedDocs", fields: [submittedById], references: [id])
-  submittedById  Int
-  reviewedBy     User?     @relation("ReviewedDocs", fields: [reviewedById], references: [id])
-  reviewedById   Int?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  approvals      Approval[]
-  progress       String? 
+  id              Int          @id @default(autoincrement())
+  name            String
+  filePath        String
+  status          Status       @default(submitted)
+  overallDeadline DateTime?
+  documentType    ApprovalType?
+  contract        Contract?    @relation(fields: [contractId], references: [id])
+  contractId      Int?
+  submittedBy     User         @relation("SubmittedDocs", fields: [submittedById], references: [id])
+  submittedById   Int
+  reviewedBy      User?        @relation("ReviewedDocs", fields: [reviewedById], references: [id])
+  reviewedById    Int?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  progress        String?
+  version         Int          @default(1) // untuk versi revisi
+  remarks         String?      // untuk keterangan tambahan dokumen
+  approvals       Approval[]
 
   @@index([status, overallDeadline])
   @@index([submittedById, createdAt])
-  @@index([contractId]) 
+  @@index([contractId])
 }
 
 model Approval {
-  id           Int       @id @default(autoincrement())
-  document     Document  @relation(fields: [documentId], references: [id])
+  id           Int          @id @default(autoincrement())
+  document     Document     @relation(fields: [documentId], references: [id])
   documentId   Int
   type         ApprovalType
-  approvedBy   User      @relation(fields: [approvedById], references: [id])
+  approvedBy   User         @relation(fields: [approvedById], references: [id])
   approvedById Int
 
   status       Status
   notes        String?
-  deadline     DateTime  
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  deadline     DateTime
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
-  @@index([documentId, deadline]) 
-  @@index([approvedById, deadline]) 
-  @@index([status, deadline]) 
+  @@index([documentId, deadline])
+  @@index([approvedById, deadline])
+  @@index([status, deadline])
 }
