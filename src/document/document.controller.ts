@@ -11,6 +11,7 @@ import {
   UploadedFile,
   UseInterceptors,
   Get,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
@@ -29,7 +30,7 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads', // folder tempat file disimpan
+        destination: './uploads',
         filename: (req, file, callback) => {
           const uniqueSuffix =
             Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -43,13 +44,17 @@ export class DocumentController {
   async submit(
     @Request() req,
     @Body() body: { name: string; contractId?: number; documentType: string },
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file?: Express.Multer.File, // <-- optional
   ) {
+    if (!file) {
+      throw new BadRequestException('File is required');
+    }
+
     const filePath = `uploads/${file.filename}`;
     return this.documentService.submit(req.user.id, {
       name: body.name,
       filePath,
-      contractId: body.contractId,
+      contractId: body.contractId ? Number(body.contractId) : undefined,
       documentType: body.documentType as ApprovalType,
     });
   }

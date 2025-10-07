@@ -10,6 +10,7 @@ import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role } from '@prisma/client';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -110,18 +111,15 @@ export class AuthService {
 
   async login(data: { email: string; password: string }) {
     try {
-      // Validasi input
       if (!data.email || !data.password) {
         throw new BadRequestException('Email and password are required');
       }
 
-      // Validasi email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(data.email)) {
         throw new BadRequestException('Invalid email format');
       }
 
-      // Cari user berdasarkan email
       const user = await this.prisma.user.findUnique({
         where: { email: data.email },
       });
@@ -130,7 +128,6 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
-      // Verifikasi password
       const isPasswordValid = await bcrypt.compare(
         data.password,
         user.password,
@@ -139,17 +136,16 @@ export class AuthService {
         throw new UnauthorizedException('Invalid credentials');
       }
 
-      // Buat JWT tokens
       const payload = {
         sub: user.id,
         email: user.email,
         role: user.role,
+        nonce: randomBytes(32).toString('hex'),
       };
 
       const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
-      const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+      const refreshToken = this.jwtService.sign(payload, { expiresIn: '1h' });
 
-      // Update refresh token di database
       await this.prisma.user.update({
         where: { id: user.id },
         data: { refreshToken },
@@ -159,12 +155,6 @@ export class AuthService {
         message: 'Login successful',
         accessToken,
         refreshToken,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        },
       };
     } catch (error) {
       if (
