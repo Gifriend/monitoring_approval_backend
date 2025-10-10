@@ -1,4 +1,4 @@
-import { PrismaClient, Role, Status, ApprovalType } from '@prisma/client';
+import { PrismaClient, Division, Status, ApprovalType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
@@ -8,25 +8,19 @@ async function main() {
 
   // === USERS ===
   const [manager, dalkon, engineer, vendor] = await Promise.all([
-    prisma.user.upsert({
-      where: { email: 'manager@example.com' },
-      update: {},
-      create: { email: 'manager@example.com', name: 'John Manager', password: passwordHash, role: Role.Manager },
+    prisma.user.create({
+      data:{
+        email: 'manager@example.com', name: 'John Manager', password: passwordHash, division: Division.Manager 
+      }
     }),
-    prisma.user.upsert({
-      where: { email: 'dalkon@example.com' },
-      update: {},
-      create: { email: 'dalkon@example.com', name: 'Jane Dalkon', password: passwordHash, role: Role.Dalkon },
+    prisma.user.create({
+      data: { email: 'dalkon@example.com', name: 'Jane Dalkon', password: passwordHash, division: Division.Dalkon },
     }),
-    prisma.user.upsert({
-      where: { email: 'engineer@example.com' },
-      update: {},
-      create: { email: 'engineer@example.com', name: 'Bob Engineer', password: passwordHash, role: Role.Engineer },
+    prisma.user.create({
+      data: { email: 'engineer@example.com', name: 'Bob Engineer', password: passwordHash, division: Division.Engineer },
     }),
-    prisma.user.upsert({
-      where: { email: 'vendor@example.com' },
-      update: {},
-      create: { email: 'vendor@example.com', name: 'Alice Vendor', password: passwordHash, role: Role.Vendor },
+    prisma.user.create({
+      data: { email: 'vendor@example.com', name: 'Alice Vendor', password: passwordHash, division: Division.Vendor },
     }),
   ]);
 

@@ -8,16 +8,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
-generator seed {
-  provider = "ts-node"
-}
-
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-enum Role {
+enum Division {
   Manager
   Dalkon
   Engineer
@@ -46,7 +42,7 @@ model User {
   email            String      @unique
   name             String?
   password         String
-  role             Role
+  division         Division
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   refreshToken     String?
@@ -55,7 +51,7 @@ model User {
   reviewedDocuments  Document[] @relation("ReviewedDocs")
   approvals          Approval[]
 
-  @@index([email, role])
+  @@index([email,division])
 }
 
 model Contract {

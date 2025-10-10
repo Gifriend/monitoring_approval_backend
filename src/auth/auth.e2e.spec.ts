@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
-import { Role } from '@prisma/client';
+import { Division } from '@prisma/client';
 import { AppModule } from 'src/app.module';
 
 describe('AuthController (e2e)', () => {
@@ -33,7 +33,7 @@ describe('AuthController (e2e)', () => {
         email: 'manager@test.com',
         name: 'Manager Test',
         password: passwordHash,
-        role: Role.Manager,
+        division: Division.Manager,
       },
     });
 
@@ -69,7 +69,7 @@ describe('AuthController (e2e)', () => {
         email: 'vendor@test.com',
         name: 'Vendor User',
         password: 'password123',
-        role: Role.Vendor,
+        division: Division.Vendor,
       })
       .expect(201);
 
@@ -85,7 +85,7 @@ describe('AuthController (e2e)', () => {
         email: 'vendor@test.com',
         name: 'Vendor User',
         password: 'password123',
-        role: Role.Vendor,
+        division: Division.Vendor,
       })
       .expect(400);
   });
@@ -96,7 +96,7 @@ describe('AuthController (e2e)', () => {
       .send({ email: 'vendor@test.com', password: 'password123' })
       .expect(200);
 
-    // expect(res.body.user.role).toBe('Vendor');
+    // expect(res.body.user.division).toBe('Vendor');
   });
 
   it('should refresh token', async () => {

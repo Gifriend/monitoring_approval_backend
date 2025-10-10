@@ -9,7 +9,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
-import { Role } from '@prisma/client';
+import { Division } from '@prisma/client';
 import { randomBytes } from 'crypto';
 
 @Injectable()
@@ -19,47 +19,28 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async register(
-    userId: number,
-    data: { email: string; name?: string; password: string; role: Role },
-  ) {
+  async register(data: {
+    email: string;
+    name: string;
+    password: string;
+    division: Division;
+  }) {
     try {
-      // Periksa apakah user yang melakukan registrasi adalah Manager atau Consultant
-      const currentUser = await this.prisma.user.findUnique({
-        where: { id: userId },
-      });
-
-      if (!currentUser || !['Manager', 'Dalkon'].includes(currentUser.role)) {
-        throw new ForbiddenException(
-          'Only Manager or Consultant can register new users',
-        );
+      if (!data.email) {
+        throw new BadRequestException('Email is required');
+      }
+      if (!data.password) {
+        throw new BadRequestException('Password is required');
+      }
+      if (!data.division) {
+        throw new BadRequestException('Division is required');
       }
 
-      // Validasi input
-      if (!data.email || !data.password || !data.role) {
-        throw new BadRequestException('Email, password, and role are required');
-      }
-
-      // Validasi email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(data.email)) {
         throw new BadRequestException('Invalid email format');
       }
 
-      // Validasi password strength
-      if (data.password.length < 6) {
-        throw new BadRequestException(
-          'Password must be at least 6 characters long',
-        );
-      }
-
-      // Validasi role
-      const validRoles = Object.values(Role);
-      if (!validRoles.includes(data.role)) {
-        throw new BadRequestException('Invalid role');
-      }
-
-      // Cek apakah email sudah terdaftar
       const existingUser = await this.prisma.user.findUnique({
         where: { email: data.email },
       });
@@ -67,22 +48,20 @@ export class AuthService {
         throw new BadRequestException('Email already registered');
       }
 
-      // Hash password
       const hashedPassword = await bcrypt.hash(data.password, 10);
 
-      // Buat user baru
       const newUser = await this.prisma.user.create({
         data: {
           email: data.email,
           name: data.name,
           password: hashedPassword,
-          role: data.role,
+          division: data.division,
         },
         select: {
           id: true,
           email: true,
           name: true,
-          role: true,
+          division: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -96,15 +75,12 @@ export class AuthService {
       if (error.code === 'P2002') {
         throw new BadRequestException('Email already registered');
       }
-
       if (
-        error instanceof ForbiddenException ||
         error instanceof BadRequestException ||
         error instanceof UnauthorizedException
       ) {
         throw error;
       }
-
       throw new InternalServerErrorException('Registration failed');
     }
   }
@@ -139,7 +115,7 @@ export class AuthService {
       const payload = {
         sub: user.id,
         email: user.email,
-        role: user.role,
+        division: user.division,
         nonce: randomBytes(32).toString('hex'),
       };
 
@@ -194,7 +170,7 @@ export class AuthService {
       const newPayload = {
         sub: user.id,
         email: user.email,
-        role: user.role,
+        division: user.division,
       };
 
       const accessToken = this.jwtService.sign(newPayload, {
@@ -208,7 +184,7 @@ export class AuthService {
           id: user.id,
           email: user.email,
           name: user.name,
-          role: user.role,
+          division: user.division,
         },
       };
     } catch (error) {
@@ -254,7 +230,7 @@ export class AuthService {
           id: true,
           email: true,
           name: true,
-          role: true,
+          division: true,
           createdAt: true,
           updatedAt: true,
           submittedDocuments: {

@@ -6,7 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { Role, Status } from '@prisma/client';
+import { Division, Status } from '@prisma/client';
 
 describe('DocumentService', () => {
   let service: DocumentService;
@@ -40,7 +40,7 @@ describe('DocumentService', () => {
     it('should allow vendor to submit document', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
         id: 1,
-        role: Role.Vendor,
+        division: Division.Vendor,
       });
       (prisma.document.create as jest.Mock).mockResolvedValue({
         id: 1,
@@ -60,7 +60,7 @@ describe('DocumentService', () => {
     it('should throw if user is not vendor', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
         id: 2,
-        role: Role.Manager,
+        division: Division.Manager,
       });
 
       await expect(
@@ -75,7 +75,7 @@ describe('DocumentService', () => {
 
   describe('dalkonReview', () => {
     it('should approve document', async () => {
-      const user = { id: 10, role: Role.Dalkon };
+      const user = { id: 10, division: Division.Dalkon };
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
@@ -88,7 +88,7 @@ describe('DocumentService', () => {
     });
 
     it('should return for correction', async () => {
-      const user = { id: 10, role: Role.Dalkon };
+      const user = { id: 10, division: Division.Dalkon };
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
@@ -101,7 +101,7 @@ describe('DocumentService', () => {
     });
 
     it('should throw if user is not Dalkon', async () => {
-      const user = { id: 11, role: Role.Engineer };
+      const user = { id: 11, division: Division.Engineer };
       await expect(service.dalkonReview(user, 1, 'approve')).rejects.toThrow(
         ForbiddenException,
       );
@@ -110,7 +110,7 @@ describe('DocumentService', () => {
 
   describe('engineeringReview', () => {
     it('should approve with notes', async () => {
-      const user = { id: 20, role: Role.Engineer };
+      const user = { id: 20, division: Division.Engineer };
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
@@ -128,7 +128,7 @@ describe('DocumentService', () => {
     });
 
     it('should throw if invalid action', async () => {
-      const user = { id: 20, role: Role.Engineer };
+      const user = { id: 20, division: Division.Engineer };
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
 
       await expect(
@@ -139,7 +139,7 @@ describe('DocumentService', () => {
 
   describe('managerReview', () => {
     it('should approve document', async () => {
-      const user = { id: 30, role: Role.Manager };
+      const user = { id: 30, division: Division.Manager };
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
@@ -157,7 +157,7 @@ describe('DocumentService', () => {
     it('should allow vendor to resubmit and increment version', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
         id: 1,
-        role: Role.Vendor,
+        division: Division.Vendor,
       });
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({
         id: 5,
@@ -177,7 +177,7 @@ describe('DocumentService', () => {
 
   describe('getProgress', () => {
     it('should allow Dalkon to view progress with all steps', async () => {
-      const user = { id: 10, role: Role.Dalkon };
+      const user = { id: 10, division: Division.Dalkon };
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({
         id: 1,
         status: Status.approved,
@@ -200,7 +200,7 @@ describe('DocumentService', () => {
     it('should update filePath for vendor', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
         id: 1,
-        role: Role.Vendor,
+        division: Division.Vendor,
       });
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({
         id: 1,
@@ -220,14 +220,14 @@ describe('DocumentService', () => {
     it('should return all completed documents for a vendor', async () => {
       (prisma.user.findUnique as jest.Mock).mockResolvedValue({
         id: 1,
-        role: Role.Vendor,
+        division: Division.Vendor,
       });
       (prisma.document.findMany as jest.Mock).mockResolvedValue([
         { id: 1, status: Status.approved },
         { id: 2, status: Status.rejected },
       ]);
 
-      const result = await service.getHistory({ id: 1, role: Role.Vendor });
+      const result = await service.getHistory({ id: 1, division: Division.Vendor });
 
       expect(result).toHaveLength(2);
       expect(result[0].status).toBe(Status.approved);
@@ -236,10 +236,10 @@ describe('DocumentService', () => {
 
   // === FULL FLOW TESTING ===
   describe('Full approval workflow', () => {
-    const vendor = { id: 1, role: Role.Vendor };
-    const dalkon = { id: 2, role: Role.Dalkon };
-    const engineer = { id: 3, role: Role.Engineer };
-    const manager = { id: 4, role: Role.Manager };
+    const vendor = { id: 1, division: Division.Vendor };
+    const dalkon = { id: 2, division: Division.Dalkon };
+    const engineer = { id: 3, division: Division.Engineer };
+    const manager = { id: 4, division: Division.Manager };
 
     beforeEach(() => {
       jest.clearAllMocks();

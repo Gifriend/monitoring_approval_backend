@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Role, Status, ApprovalType } from '@prisma/client';
+import { Division, Status, ApprovalType } from '@prisma/client';
 
 @Injectable()
 export class DocumentService {
@@ -23,7 +23,7 @@ export class DocumentService {
   ) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
-    if (user.role !== Role.Vendor)
+    if (user.division !== Division.Vendor)
       throw new ForbiddenException('Only vendors can submit documents');
 
     return this.prisma.document.create({
@@ -42,7 +42,7 @@ export class DocumentService {
 
   // === DALKON REVIEW ===
   async dalkonReview(user: any, docId: number, action: string) {
-    if (user.role !== Role.Dalkon)
+    if (user.division !== Division.Dalkon)
       throw new ForbiddenException('Only Dalkon can review');
     await this.getDocument(docId);
 
@@ -78,7 +78,7 @@ export class DocumentService {
     action: string,
     notes?: string,
   ) {
-    if (user.role !== Role.Engineer)
+    if (user.division !== Division.Engineer)
       throw new ForbiddenException('Only Engineer can review');
     await this.getDocument(docId);
 
@@ -109,7 +109,7 @@ export class DocumentService {
 
   // === MANAGER REVIEW ===
   async managerReview(user: any, docId: number, action: string) {
-    if (user.role !== Role.Manager)
+    if (user.division !== Division.Manager)
       throw new ForbiddenException('Only Manager can review');
     await this.getDocument(docId);
 
@@ -135,7 +135,7 @@ export class DocumentService {
   async resubmit(userId: number, docId: number, filePath: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
-    if (user.role !== Role.Vendor)
+    if (user.division !== Division.Vendor)
       throw new ForbiddenException('Only vendors can resubmit documents');
 
     return this.prisma.document.update({
@@ -151,7 +151,7 @@ export class DocumentService {
 
   // === GET PROGRESS (Manager & Dalkon Only) ===
   async getProgress(user: any, docId: number) {
-    if (![Role.Dalkon, Role.Manager].includes(user.role)) {
+    if (![Division.Dalkon, Division.Manager].includes(user.division)) {
       throw new ForbiddenException('Only Dalkon and Manager can view progress');
     }
 
@@ -161,7 +161,7 @@ export class DocumentService {
         approvals: {
           orderBy: { createdAt: 'asc' },
           include: {
-            approvedBy: { select: { id: true, name: true, role: true } },
+            approvedBy: { select: { id: true, name: true } },
           },
         },
       },
@@ -181,7 +181,6 @@ export class DocumentService {
           ? {
               id: a.approvedBy.id,
               name: a.approvedBy.name,
-              role: a.approvedBy.role,
             }
           : null,
         deadline: a.deadline,
@@ -243,10 +242,10 @@ export class DocumentService {
   }
   // === GET HISTORY ===
   async getHistory(user: any) {
-    const userRole = user.role;
+    const userDivision = user.division;
 
     // === Vendor melihat semua dokumen yang ia submit ===
-    if (userRole === Role.Vendor) {
+    if (userDivision === Division.Vendor) {
       return this.prisma.document.findMany({
         where: { submittedById: user.id },
         include: {
@@ -254,7 +253,7 @@ export class DocumentService {
             orderBy: { createdAt: 'desc' },
             include: {
               approvedBy: {
-                select: { id: true, name: true, role: true },
+                select: { id: true, name: true },
               },
             },
           },
@@ -267,7 +266,7 @@ export class DocumentService {
     }
 
     // === Reviewer (Dalkon, Engineer, Manager) melihat semua dokumen yang pernah direview ===
-    if ([Role.Dalkon, Role.Engineer, Role.Manager].includes(userRole)) {
+    if ([Division.Dalkon, Division.Engineer, Division.Manager].includes(userDivision)) {
       return this.prisma.document.findMany({
         where: {
           OR: [
@@ -280,7 +279,7 @@ export class DocumentService {
             orderBy: { createdAt: 'desc' },
             include: {
               approvedBy: {
-                select: { id: true, name: true, role: true },
+                select: { id: true, name: true },
               },
             },
           },
@@ -294,7 +293,6 @@ export class DocumentService {
         orderBy: { updatedAt: 'desc' },
       });
     }
-
-    throw new ForbiddenException('Role not permitted to view history');
+    throw new ForbiddenException('Division not permitted to view history');
   }
 }

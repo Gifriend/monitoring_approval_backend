@@ -10,20 +10,23 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './strategy/jwt-auth.guard';
-import { Role } from '@prisma/client';
+import { Division } from '@prisma/client';
 
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
-  @UseGuards(JwtAuthGuard)
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   async register(
-    @Request() req,
-    @Body() body: { email: string; name?: string; password: string; role: Role },
+    @Body() body: { email: string; name?: string; password: string; division: Division },
   ) {
-    return this.authService.register(req.user.id, body);
+    return this.authService.register({
+      email: body.email,
+      name: body.name ?? '',
+      password: body.password,
+      division: body.division,
+    });
   }
 
   @Post('login')
