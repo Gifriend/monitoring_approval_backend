@@ -18,7 +18,8 @@ import { DocumentService } from './document.service';
 import { JwtAuthGuard } from '../auth/strategy/jwt-auth.guard';
 import { ApprovalType } from '@prisma/client';
 import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { extname, join } from 'path';
+import { tmpdir } from 'os';
 
 @Controller('documents')
 @UseGuards(JwtAuthGuard)
@@ -30,7 +31,7 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads', // Pastikan folder 'uploads' ada
+        destination: join(tmpdir(), 'uploads'), // Pastikan folder 'uploads' ada
         filename: (req, file, callback) => {
           const uniqueSuffix =
             Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -75,7 +76,7 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads',
+        destination: join(tmpdir(), 'uploads'),
         filename: (req, file, callback) => {
           const uniqueSuffix =
             Date.now() + '-' + Math.round(Math.random() * 1e9);
