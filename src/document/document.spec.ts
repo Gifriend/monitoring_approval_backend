@@ -161,17 +161,17 @@ describe('DocumentService', () => {
       });
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({
         id: 5,
-        version: 1,
+        latestVersion: 1,
       });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 5,
         status: Status.submitted,
-        version: 2,
+        latestVersion: 2,
       });
 
       const result = await service.resubmit(1, 5, 'file_v2.pdf');
       expect(result.status).toBe(Status.submitted);
-      expect(result.version).toBe(2);
+      expect(result.latestVersion).toBe(2);
     });
   });
 
@@ -190,7 +190,7 @@ describe('DocumentService', () => {
         ],
       });
 
-      const result = await service.getProgress(user, 1);
+      const result = await (service as any).getProgress(user, 1);
       expect(result.progress).toContain('Approved by Manager');
       expect((result.progress ?? []).length).toBeGreaterThan(1);
     });
@@ -211,7 +211,7 @@ describe('DocumentService', () => {
         filePath: 'new.pdf',
       });
 
-      const result = await service.uploadFile(1, 1, 'new.pdf');
+      const result = await (service as any).uploadFile(1, 1, 'new.pdf');
       expect(result.filePath).toBe('new.pdf');
     });
   });

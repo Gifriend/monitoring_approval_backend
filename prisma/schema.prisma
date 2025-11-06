@@ -38,69 +38,94 @@ enum ApprovalType {
 }
 
 model User {
-  id               Int         @id @default(autoincrement())
-  email            String      @unique
-  name             String?
-  password         String
-  division         Division
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  refreshToken     String?
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  name         String?
+  password     String
+  division     Division
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  refreshToken String?
 
-  submittedDocuments Document[] @relation("SubmittedDocs")
-  reviewedDocuments  Document[] @relation("ReviewedDocs")
+  submittedDocuments Document[]        @relation("SubmittedDocuments")
+  reviewedDocuments  Document[]        @relation("ReviewedDocuments")
   approvals          Approval[]
+  uploadedVersions   DocumentVersion[]
 
-  @@index([email,division])
+  @@index([email, division])
 }
 
 model Contract {
-  id             Int         @id @default(autoincrement())
-  contractNumber String      @unique
+  id             String     @id @default(uuid())
+  contractNumber String     @unique
   contractDate   DateTime
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
   documents      Document[]
 }
 
 model Document {
-  id              Int          @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   name            String
   filePath        String
-  status          Status       @default(submitted)
+  status          String    @default("submitted")
   overallDeadline DateTime?
-  documentType    ApprovalType?
-  contract        Contract?    @relation(fields: [contractId], references: [id])
-  contractId      Int?
-  submittedBy     User         @relation("SubmittedDocs", fields: [submittedById], references: [id])
-  submittedById   Int
-  reviewedBy      User?        @relation("ReviewedDocs", fields: [reviewedById], references: [id])
-  reviewedById    Int?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  progress        String?
-  version         Int          @default(1) // untuk versi revisi
-  remarks         String?      // untuk keterangan tambahan dokumen
-  approvals       Approval[]
 
-  @@index([status, overallDeadline])
-  @@index([submittedById, createdAt])
+  documentType String?
+  contractId   String?
+  contract     Contract? @relation(fields: [contractId], references: [id])
+
+  submittedById Int
+  submittedBy   User @relation("SubmittedDocuments", fields: [submittedById], references: [id])
+
+  reviewedById Int?
+  reviewedBy   User? @relation("ReviewedDocuments", fields: [reviewedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  remarks   String?
+
+  approvals Approval[]
+
+  // ✅ TAMBAHKAN ATAU UBAH 3 FIELD INI
+  progress      String[] // UBAH: dari String? atau String menjadi String[]
+  latestVersion Int               @default(1) // TAMBAHKAN
+  versions      DocumentVersion[] // TAMBAHKAN
+
+  @@index([submittedById])
+  @@index([reviewedById])
   @@index([contractId])
 }
 
-model Approval {
-  id           Int          @id @default(autoincrement())
-  document     Document     @relation(fields: [documentId], references: [id])
+// ✅ TAMBAHKAN MODEL BARU INI
+model DocumentVersion {
+  id           String   @id @default(cuid())
+  filePath     String
+  version      Int
+  createdAt    DateTime @default(now())
   documentId   Int
-  type         ApprovalType
-  approvedBy   User         @relation(fields: [approvedById], references: [id])
+  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedById Int
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+
+  @@unique([documentId, version])
+  @@index([documentId])
+  @@index([uploadedById])
+}
+
+model Approval {
+  id           Int      @id @default(autoincrement())
+  document     Document @relation(fields: [documentId], references: [id])
+  documentId   Int
+  type         String
+  approvedBy   User     @relation(fields: [approvedById], references: [id])
   approvedById Int
 
-  status       Status
-  notes        String?
-  deadline     DateTime
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  status    String
+  notes     String?
+  deadline  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([documentId, deadline])
   @@index([approvedById, deadline])

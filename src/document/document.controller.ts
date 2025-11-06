@@ -30,7 +30,7 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: './uploads',
+        destination: './uploads', // Pastikan folder 'uploads' ada
         filename: (req, file, callback) => {
           const uniqueSuffix =
             Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -43,18 +43,29 @@ export class DocumentController {
   @HttpCode(HttpStatus.CREATED)
   async submit(
     @Request() req,
-    @Body() body: { name: string; contractId?: number; documentType: string },
-    @UploadedFile() file?: Express.Multer.File, // <-- optional
+    @Body()
+    body: {
+      name: string;
+      contractNumber?: string;
+      documentType: string;
+    },
+    @UploadedFile() file?: Express.Multer.File,
   ) {
     if (!file) {
       throw new BadRequestException('File is required');
+    }
+
+    if (!['protection', 'civil'].includes(body.documentType)) {
+      throw new BadRequestException(
+        'documentType must be either "protection" or "civil"',
+      );
     }
 
     const filePath = `uploads/${file.filename}`;
     return this.documentService.submit(req.user.id, {
       name: body.name,
       filePath,
-      contractId: body.contractId ? Number(body.contractId) : undefined,
+      contractNumber: body.contractNumber,
       documentType: body.documentType as ApprovalType,
     });
   }
@@ -79,11 +90,14 @@ export class DocumentController {
     @Param('id') id: number,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    if (!file) {
+      throw new BadRequestException('File is required for resubmission');
+    }
     const filePath = `uploads/${file.filename}`;
     return this.documentService.resubmit(req.user.id, +id, filePath);
   }
 
-  // === REVIEW HANDLERS (tetap sama) ===
+  // === REVIEW HANDLERS ===
   @Patch(':id/dalkon-review')
   async dalkonReview(
     @Request() req,
@@ -116,9 +130,21 @@ export class DocumentController {
     return this.documentService.managerReview(req.user, +id, body.action);
   }
 
-  // === GET HISTORY DOKUMEN ===
+  // === GET HISTORY (DOKUMEN SELESAI) ===
   @Get('history')
   async getHistory(@Request() req) {
     return this.documentService.getHistory(req.user);
+  }
+
+  // === GET ALL ACTIVE DOCUMENTS (DASHBOARD/INBOX) ===
+  @Get()
+  async getActiveDocuments(@Request() req) {
+    return this.documentService.getActiveDocuments(req.user);
+  }
+
+  // === GET DETAIL DOKUMEN (BESERTA SEMUA VERSI) ===
+  @Get(':id')
+  async getById(@Param('id') id: number, @Request() req) {
+    return this.documentService.getById(+id, req.user);
   }
 }

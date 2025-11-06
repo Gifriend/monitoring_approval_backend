@@ -1,6 +1,5 @@
 import {
   Injectable,
-  ForbiddenException,
   BadRequestException,
   InternalServerErrorException,
   UnauthorizedException,
@@ -113,7 +112,8 @@ export class AuthService {
       }
 
       const payload = {
-        sub: user.id,
+        id: user.id,
+        name: user.name,
         email: user.email,
         division: user.division,
         nonce: randomBytes(32).toString('hex'),
@@ -157,7 +157,7 @@ export class AuthService {
       // Cari user dengan refresh token yang sesuai
       const user = await this.prisma.user.findFirst({
         where: {
-          id: payload.sub,
+          id: payload.id,
           refreshToken: refreshToken,
         },
       });
@@ -168,7 +168,7 @@ export class AuthService {
 
       // Buat access token baru
       const newPayload = {
-        sub: user.id,
+        id: user.id,
         email: user.email,
         division: user.division,
       };
