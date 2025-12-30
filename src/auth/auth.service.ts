@@ -100,7 +100,7 @@ export class AuthService {
       });
 
       if (!user) {
-        throw new UnauthorizedException('Invalid credentials');
+        throw new UnauthorizedException('Email atau Password salah');
       }
 
       const isPasswordValid = await bcrypt.compare(
@@ -108,7 +108,7 @@ export class AuthService {
         user.password,
       );
       if (!isPasswordValid) {
-        throw new UnauthorizedException('Invalid credentials');
+        throw new UnauthorizedException('Email atau Password salah');
       }
 
       const payload = {
@@ -119,7 +119,7 @@ export class AuthService {
         nonce: randomBytes(32).toString('hex'),
       };
 
-      const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+      const accessToken = this.jwtService.sign(payload, { expiresIn: '1d' });
       const refreshToken = this.jwtService.sign(payload, { expiresIn: '1h' });
 
       await this.prisma.user.update({

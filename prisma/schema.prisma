@@ -68,7 +68,7 @@ model Document {
   id              Int       @id @default(autoincrement())
   name            String
   filePath        String
-  status          String    @default("submitted")
+  status          Status    @default(submitted)
   overallDeadline DateTime?
 
   documentType String?
@@ -87,17 +87,16 @@ model Document {
 
   approvals Approval[]
 
-  // ✅ TAMBAHKAN ATAU UBAH 3 FIELD INI
-  progress      String[] // UBAH: dari String? atau String menjadi String[]
-  latestVersion Int               @default(1) // TAMBAHKAN
-  versions      DocumentVersion[] // TAMBAHKAN
+  progress      String[] 
+  latestVersion Int               @default(1) 
+  versions      DocumentVersion[] 
+  returnRequestedBy  Division?
 
   @@index([submittedById])
   @@index([reviewedById])
   @@index([contractId])
 }
 
-// ✅ TAMBAHKAN MODEL BARU INI
 model DocumentVersion {
   id           String   @id @default(cuid())
   filePath     String

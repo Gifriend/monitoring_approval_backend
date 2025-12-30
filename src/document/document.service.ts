@@ -5,12 +5,106 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-// ✅ PENTING: Import Enums dari Prisma Client
+import * as fs from 'fs';
+import * as path from 'path';
 import { ApprovalType, Division, Status } from '@prisma/client';
+import { PDFDocument, rgb } from 'pdf-lib';
 
 @Injectable()
 export class DocumentService {
   constructor(private prisma: PrismaService) {}
+
+  // Helper method to merge annotations to PDF
+  private async mergeAnnotationsToPdf(
+    documentId: number,
+    annotations: any[],
+  ): Promise<string> {
+    const document = await this.prisma.document.findUnique({
+      where: { id: documentId },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document not found');
+    }
+
+    const filePath = path.join(
+      process.cwd(),
+      'uploads',
+      path.basename(document.filePath),
+    );
+
+    if (!fs.existsSync(filePath)) {
+      throw new NotFoundException('File not found on server');
+    }
+
+    const existingPdfBytes = fs.readFileSync(filePath);
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+    const pages = pdfDoc.getPages();
+
+    // Process annotations
+    for (const ann of annotations) {
+      const page = pages[ann.page - 1];
+      if (!page) continue;
+
+      const { width, height } = page.getSize();
+
+      if (ann.type === 'draw' && ann.path) {
+        const { createCanvas } = require('canvas');
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+
+        ctx.lineWidth = ann.thickness || 4;
+        ctx.strokeStyle = ann.color || '#ff0000';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+
+        ann.path.forEach((p: any, i: number) => {
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.stroke();
+
+        const pngImage = await pdfDoc.embedPng(canvas.toDataURL());
+        page.drawImage(pngImage, { x: 0, y: 0, width, height });
+      } else if (ann.type === 'text' && ann.text && ann.position) {
+        const rgbColor = this.hexToRgb(ann.color || '#000000');
+        page.drawText(ann.text, {
+          x: ann.position.x,
+          y: height - ann.position.y,
+          size: ann.fontSize || 20,
+          color: rgb(rgbColor.r, rgbColor.g, rgbColor.b),
+        });
+      } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
+        const base64Data = ann.stampImage.split(',')[1];
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+
+        let stampImg;
+        if (ann.stampImage.includes('image/png')) {
+          stampImg = await pdfDoc.embedPng(imageBuffer);
+        } else {
+          stampImg = await pdfDoc.embedJpg(imageBuffer);
+        }
+
+        page.drawImage(stampImg, {
+          x: ann.position.x,
+          y: height - ann.position.y - (ann.height || 100),
+          width: ann.width || 100,
+          height: ann.height || 100,
+        });
+      }
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const newFilename = `annotated-${Date.now()}-${path.basename(
+      document.filePath,
+    )}`;
+    const newFilePath = path.join(process.cwd(), 'uploads', newFilename);
+
+    fs.writeFileSync(newFilePath, pdfBytes);
+
+    return `uploads/${newFilename}`;
+  }
 
   // === SUBMIT (v1) ===
   async submit(
@@ -28,7 +122,6 @@ export class DocumentService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    // ✅ FIX: Gunakan Enum
     if (user.division !== Division.Vendor)
       throw new ForbiddenException('Only vendors can submit documents');
 
@@ -56,7 +149,7 @@ export class DocumentService {
         documentType: data.documentType,
         contractId: contractId,
         submittedById: userId,
-        status: Status.submitted, // ✅ FIX: Gunakan Enum
+        status: Status.submitted,
         progress: ['Submitted by vendor'],
         latestVersion: 1,
         versions: {
@@ -70,53 +163,130 @@ export class DocumentService {
     });
   }
 
+  private async saveReviewerAnnotation(
+    docId: number,
+    filePath: string,
+    uploadedById: number,
+    reviewerDivision: Division,
+  ) {
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: { latestVersion: true },
+    });
+
+    if (!doc) throw new NotFoundException('Document not found');
+
+    const annotationVersion = doc.latestVersion + 100; // 3 → 103, 4 → 104, dst
+
+    await this.prisma.documentVersion.create({
+      data: {
+        documentId: docId,
+        filePath,
+        version: annotationVersion,
+        uploadedById,
+      },
+    });
+
+    await this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        progress: {
+          push: `${reviewerDivision} mengunggah versi anotasi`,
+        },
+      },
+    });
+  }
+
+  private async createAnnotationVersion(
+    docId: number,
+    filePath: string,
+    uploadedById: number,
+    notes?: string,
+  ) {
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: { latestVersion: true },
+    });
+
+    const annotationVersion = doc!.latestVersion + 100; // biar beda jauh dari versi resmi
+
+    return this.prisma.documentVersion.create({
+      data: {
+        documentId: docId,
+        filePath,
+        version: annotationVersion,
+        uploadedById,
+        // Bisa tambah field khusus kalau perlu, tapi cukup di notes
+      },
+    });
+  }
+
   // === DALKON REVIEW ===
-  async dalkonReview(user: any, docId: number, action: string) {
-    // ✅ FIX: Gunakan Enum
+  async dalkonReview(
+    user: any,
+    docId: number,
+    action: string,
+    notes?: string,
+    annotations?: any[],
+  ) {
     if (user.division !== Division.Dalkon)
-      throw new ForbiddenException('Only Dalkon can review');
-    if (!user.id) {
-      throw new BadRequestException('Invalid user ID in token');
+      throw new ForbiddenException('Only Dalkon');
+
+    const doc = await this.prisma.document.findUnique({ where: { id: docId } });
+    if (!doc) throw new NotFoundException();
+
+    // Merge annotations if provided
+    let annotatedFilePath: string | undefined;
+    if (annotations && annotations.length > 0) {
+      annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
-    const doc = await this.getDocument(docId);
+
+    let newStatus: Status;
+    let logMessage = '';
 
     if (action === 'approve') {
-      // ✅ FIX: Gunakan Enum
       if (doc.status === Status.submitted) {
-        return this.updateStatus(
-          docId,
-          Status.inReviewEngineering, // ✅ FIX: Enum
-          user.id,
-          'Forwarded to Engineering',
-        );
-        // ✅ FIX: Gunakan Enum
-      } else if (doc.status === Status.approvedWithNotes) {
-        return this.updateStatus(
-          docId,
-          Status.inReviewManager, // ✅ FIX: Enum
-          user.id,
-          'Forwarded to Manager',
-        );
+        newStatus = Status.inReviewEngineering;
+        logMessage = 'Forwarded to Engineering';
+      } else if (
+        [Status.approved, Status.approvedWithNotes].includes(doc.status as any)
+      ) {
+        newStatus = Status.inReviewManager;
+        logMessage = 'Forwarded to Manager';
+      } else {
+        throw new BadRequestException('Invalid status for approve');
       }
-      throw new BadRequestException(
-        'Document not in a state to be approved by Dalkon',
-      );
     } else if (action === 'returnForCorrection') {
-      return this.updateStatus(
-        docId,
-        Status.returnForCorrection, // ✅ FIX: Enum
-        user.id,
-        'Returned to Vendor',
-      );
+      newStatus = Status.returnForCorrection;
+      logMessage = notes || 'Returned by Dalkon';
     } else if (action === 'reject') {
-      return this.updateStatus(
+      newStatus = Status.rejected;
+      logMessage = notes || 'Rejected by Dalkon';
+    } else {
+      throw new BadRequestException('Invalid action');
+    }
+
+    const updated = await this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        status: newStatus,
+        reviewedById: user.id,
+        returnRequestedBy:
+          action === 'returnForCorrection' ? Division.Dalkon : undefined,
+        progress: { push: logMessage },
+      },
+    });
+
+    if (annotatedFilePath) {
+      await this.saveReviewerAnnotation(
         docId,
-        Status.rejected, // ✅ FIX: Enum
+        annotatedFilePath,
         user.id,
-        'Rejected by Dalkon',
+        Division.Dalkon,
       );
     }
-    throw new BadRequestException('Invalid action');
+
+    return updated;
   }
 
   // === ENGINEERING REVIEW ===
@@ -125,74 +295,118 @@ export class DocumentService {
     docId: number,
     action: string,
     notes?: string,
+    annotations?: any[],
   ) {
-    // ✅ FIX: Gunakan Enum
     if (user.division !== Division.Engineer)
-      throw new ForbiddenException('Only Engineer can review');
-    if (!user.id) {
-      throw new BadRequestException('Invalid user ID in token');
-    }
-    const doc = await this.getDocument(docId);
-    // ✅ FIX: Gunakan Enum
-    if (doc.status !== Status.inReviewEngineering) {
-      throw new BadRequestException('Document is not ready for Engineering review');
+      throw new ForbiddenException('Only Engineer');
+
+    const doc = await this.prisma.document.findUnique({ where: { id: docId } });
+    if (!doc) throw new NotFoundException();
+
+    // Merge annotations if provided
+    let annotatedFilePath: string | undefined;
+    if (annotations && annotations.length > 0) {
+      annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
-    if (action === 'approve') {
-      return this.updateStatus(
+    let newStatus: Status;
+    let logMessage = '';
+
+    switch (action) {
+      case 'approve':
+        newStatus = Status.approved;
+        logMessage = notes || 'Approved by Engineer';
+        break;
+      case 'approveWithNotes':
+        newStatus = Status.approvedWithNotes;
+        logMessage = notes || 'Approved with notes';
+        break;
+      case 'returnForCorrection':
+        newStatus = Status.returnForCorrection;
+        logMessage = notes || 'Returned by Engineer';
+        break;
+      default:
+        throw new BadRequestException('Invalid action');
+    }
+
+    const updated = await this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        status: newStatus,
+        reviewedById: user.id,
+        returnRequestedBy:
+          action === 'returnForCorrection' ? Division.Engineer : undefined,
+        progress: { push: logMessage },
+      },
+    });
+
+    if (annotatedFilePath) {
+      await this.saveReviewerAnnotation(
         docId,
-        Status.approved, // ✅ FIX: Enum
+        annotatedFilePath,
         user.id,
-        'Approved by Engineer',
-      );
-    } else if (action === 'approveWithNotes') {
-      return this.updateStatus(
-        docId,
-        Status.approvedWithNotes, // ✅ FIX: Enum
-        user.id,
-        notes || 'Approved with notes',
-      );
-    } else if (action === 'returnForCorrection') {
-      return this.updateStatus(
-        docId,
-        Status.returnForCorrection, // ✅ FIX: Enum
-        user.id,
-        notes || 'Returned for correction',
+        Division.Engineer,
       );
     }
-    throw new BadRequestException('Invalid action');
+
+    return updated;
   }
 
-  // === MANAGER REVIEW ===
-  async managerReview(user: any, docId: number, action: string) {
-    // ✅ FIX: Gunakan Enum
+  // MANAGER REVIEW
+  async managerReview(
+    user: any,
+    docId: number,
+    action: string,
+    notes?: string,
+    annotations?: any[],
+  ) {
     if (user.division !== Division.Manager)
-      throw new ForbiddenException('Only Manager can review');
-    if (!user.id) {
-      throw new BadRequestException('Invalid user ID in token');
-    }
-    const doc = await this.getDocument(docId);
-    // ✅ FIX: Gunakan Enum
-    if (doc.status !== Status.inReviewManager) {
-      throw new BadRequestException('Document is not ready for Manager review');
+      throw new ForbiddenException('Only Manager');
+
+    const doc = await this.prisma.document.findUnique({ where: { id: docId } });
+    if (!doc || doc.status !== Status.inReviewManager)
+      throw new BadRequestException('Document not in manager review');
+
+    // Merge annotations if provided
+    let annotatedFilePath: string | undefined;
+    if (annotations && annotations.length > 0) {
+      annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
+    let newStatus: Status;
+    let logMessage = '';
+
     if (action === 'approve') {
-      return this.updateStatus(
-        docId,
-        Status.approved, // ✅ FIX: Enum
-        user.id,
-        'Approved by Manager',
-      );
+      newStatus = Status.approved;
+      logMessage = notes || 'Approved by Manager';
     } else if (action === 'returnForCorrection') {
-      return this.updateStatus(
+      newStatus = Status.returnForCorrection;
+      logMessage = notes || 'Returned by Manager';
+    } else {
+      throw new BadRequestException('Invalid action');
+    }
+
+    const updated = await this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        status: newStatus,
+        reviewedById: user.id,
+        returnRequestedBy:
+          action === 'returnForCorrection' ? Division.Manager : undefined,
+        progress: { push: logMessage },
+      },
+    });
+
+    if (annotatedFilePath) {
+      await this.saveReviewerAnnotation(
         docId,
-        Status.returnForCorrection, // ✅ FIX: Enum
+        annotatedFilePath,
         user.id,
-        'Returned by Manager',
+        Division.Manager,
       );
     }
-    throw new BadRequestException('Invalid action');
+
+    return updated;
   }
 
   // === RESUBMIT VENDOR ===
@@ -203,7 +417,6 @@ export class DocumentService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    // ✅ FIX: Gunakan Enum
     if (user.division !== Division.Vendor)
       throw new ForbiddenException('Only vendors can resubmit documents');
 
@@ -211,14 +424,12 @@ export class DocumentService {
     if (doc.submittedById !== userId) {
       throw new ForbiddenException('You did not submit this document');
     }
-    // ✅ FIX: Gunakan Enum
     if (doc.status !== Status.returnForCorrection) {
       throw new BadRequestException(
         'Document cannot be resubmitted unless status is "returnForCorrection"',
       );
     }
 
-    // ✅ FIX: Gunakan `latestVersion`
     const newVersion = doc.latestVersion + 1;
 
     return this.prisma.document.update({
@@ -226,7 +437,7 @@ export class DocumentService {
       data: {
         filePath,
         latestVersion: newVersion,
-        status: Status.submitted, // ✅ FIX: Enum
+        status: Status.submitted,
         reviewedById: null,
         progress: {
           push: 'Resubmitted by vendor',
@@ -244,74 +455,253 @@ export class DocumentService {
 
   // === GET ACTIVE DOCUMENTS (INBOX/DASHBOARD) ===
   async getActiveDocuments(user: any) {
-    const userDivision = user.division;
-    const userId = user.id;
-
-    if (!userId) {
-      throw new BadRequestException('User ID not found in token');
-    }
-
-    // ✅ FIX: Gunakan Enum
-    const finishedStatuses = [
+    const finished = [
       Status.approved,
       Status.approvedWithNotes,
       Status.rejected,
     ];
 
-    const baseWhere: any = {
-      status: { notIn: finishedStatuses },
-    };
+    if (user.division === Division.Vendor) {
+      return this.prisma.document.findMany({
+        where: {
+          submittedById: user.id,
+          OR: [
+            { status: { notIn: finished } },
+            {
+              status: Status.returnForCorrection,
+              returnRequestedBy: Division.Dalkon,
+            },
+          ],
+        },
+        include: {
+          submittedBy: { select: { id: true, name: true } },
+          contract: { select: { contractNumber: true } },
+          approvals: { take: 1, orderBy: { createdAt: 'desc' } },
+          versions: { orderBy: { version: 'desc' }, take: 1 },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+    }
 
-    const includePayload = {
-      submittedBy: { select: { id: true, name: true } },
-      contract: { select: { contractNumber: true } },
-      approvals: {
-        orderBy: { createdAt: 'desc' as const }, // ✅ FIX: `as const`
-        take: 1,
-        include: { approvedBy: { select: { id: true, name: true } } },
+    // Dalkon, Engineer, Manager lihat sesuai haknya
+    const where: any = { status: { notIn: finished } };
+    if (user.division === Division.Engineer)
+      where.status = Status.inReviewEngineering;
+    if (user.division === Division.Manager)
+      where.status = Status.inReviewManager;
+
+    return this.prisma.document.findMany({
+      where,
+      include: {
+        submittedBy: { select: { id: true, name: true } },
+        contract: { select: { contractNumber: true } },
+        approvals: { take: 1, orderBy: { createdAt: 'desc' } },
+        versions: { orderBy: { version: 'desc' }, take: 1 },
       },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async getVendorPendingCorrection(user: any) {
+    if (user.division !== Division.Vendor) {
+      throw new ForbiddenException('Only vendors can access this');
+    }
+
+    return this.prisma.document.findMany({
+      where: {
+        submittedById: user.id,
+        status: Status.returnForCorrection,
+      },
+      include: {
+        submittedBy: { select: { id: true, name: true } },
+        contract: { select: { contractNumber: true } },
+        approvals: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: { approvedBy: { select: { name: true } } },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  async updateDocumentFile(userId: number, docId: number, filePath: string) {
+  const user = await this.prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new NotFoundException('User not found');
+
+  const doc = await this.prisma.document.findUnique({ 
+    where: { id: docId },
+    select: { 
+      id: true, 
+      latestVersion: true, 
+      submittedById: true,
+      status: true 
+    }
+  });
+  
+  if (!doc) throw new NotFoundException('Document not found');
+
+  // Cek otorisasi
+  const isReviewer = ([Division.Dalkon, Division.Engineer, Division.Manager] as Division[]).includes(user.division);
+  const isOwner = user.division === Division.Vendor && doc.submittedById === userId;
+  
+  if (!isReviewer && !isOwner) {
+    throw new ForbiddenException('Not authorized to update this document');
+  }
+
+  // Buat versi baru dengan nomor yang sama (overwrite preview)
+  const newVersion = doc.latestVersion;
+
+  // Update document dengan file baru
+  return this.prisma.document.update({
+    where: { id: docId },
+    data: {
+      filePath,
+      progress: {
+        push: `File updated by ${user.division}`,
+      },
+      versions: {
+        create: {
+          filePath: filePath,
+          version: newVersion + 0.1, // 1.1, 2.1, dst untuk preview
+          uploadedById: userId,
+        },
+      },
+    },
+    include: {
+      versions: { orderBy: { version: 'desc' }, take: 5 },
+      submittedBy: { select: { id: true, name: true } },
+    }
+  });
+}
+
+async saveAnnotations(
+    userId: number,
+    docId: number,
+    annotations: any[],
+    documentName: string,
+  ) {
+    // 1. Find document
+    const document = await this.prisma.document.findUnique({
+      where: { id: docId },
+    });
+
+    if (!document) {
+      throw new Error('Document not found');
+    }
+
+    // 2. Read existing PDF file
+    const filePath = path.join(
+      process.cwd(),
+      'uploads',
+      path.basename(document.filePath),
+    );
+
+    if (!fs.existsSync(filePath)) {
+      throw new Error('File not found on server');
+    }
+
+    const existingPdfBytes = fs.readFileSync(filePath);
+
+    // 3. Load PDF with pdf-lib
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+    const pages = pdfDoc.getPages();
+
+    // 4. Process annotations and embed to PDF
+    for (const ann of annotations) {
+      const page = pages[ann.page - 1];
+      if (!page) continue;
+
+      const { width, height } = page.getSize();
+
+      if (ann.type === 'draw' && ann.path) {
+        // Create canvas untuk render annotation
+        const { createCanvas } = require('canvas');
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+
+        ctx.lineWidth = ann.thickness || 4;
+        ctx.strokeStyle = ann.color || '#ff0000';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+
+        ann.path.forEach((p: any, i: number) => {
+          if (i === 0) {
+            ctx.moveTo(p.x, p.y);
+          } else {
+            ctx.lineTo(p.x, p.y);
+          }
+        });
+        ctx.stroke();
+
+        // Convert canvas to PNG and embed
+        const pngImage = await pdfDoc.embedPng(canvas.toDataURL());
+        page.drawImage(pngImage, { x: 0, y: 0, width, height });
+      } else if (ann.type === 'text' && ann.text && ann.position) {
+        // Draw text directly on PDF
+        const rgbColor = this.hexToRgb(ann.color || '#000000');
+        page.drawText(ann.text, {
+          x: ann.position.x,
+          y: height - ann.position.y, // Flip Y coordinate
+          size: ann.fontSize || 20,
+          color: rgb(rgbColor.r, rgbColor.g, rgbColor.b),
+        });
+      } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
+        // Decode base64 stamp image
+        const base64Data = ann.stampImage.split(',')[1];
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        
+        let stampImg;
+        if (ann.stampImage.includes('image/png')) {
+          stampImg = await pdfDoc.embedPng(imageBuffer);
+        } else {
+          stampImg = await pdfDoc.embedJpg(imageBuffer);
+        }
+
+        page.drawImage(stampImg, {
+          x: ann.position.x,
+          y: height - ann.position.y - (ann.height || 100),
+          width: ann.width || 100,
+          height: ann.height || 100,
+        });
+      }
+    }
+
+    // 5. Save modified PDF
+    const pdfBytes = await pdfDoc.save();
+    const newFilename = `annotated-${Date.now()}-${path.basename(
+      document.filePath,
+    )}`;
+    const newFilePath = path.join(process.cwd(), 'uploads', newFilename);
+
+    fs.writeFileSync(newFilePath, pdfBytes);
+
+    // 6. Update database with new file path
+    await this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        filePath: newFilePath,
+        updatedAt: new Date(),
+      },
+    });
+
+    return {
+      message: 'Annotations saved successfully',
+      filePath: newFilePath,
     };
+  }
 
-    // ✅ FIX: Gunakan Enum
-    if (userDivision === Division.Vendor) {
-      baseWhere.submittedById = userId;
-      return this.prisma.document.findMany({
-        where: baseWhere,
-        include: includePayload,
-        orderBy: { updatedAt: 'desc' },
-      });
-    }
-
-    // ✅ FIX: Gunakan Enum
-    if (userDivision === Division.Dalkon) {
-      return this.prisma.document.findMany({
-        where: baseWhere,
-        include: includePayload,
-        orderBy: { updatedAt: 'desc' },
-      });
-    }
-
-    // ✅ FIX: Gunakan Enum
-    if (userDivision === Division.Engineer) {
-      baseWhere.status = Status.inReviewEngineering;
-      return this.prisma.document.findMany({
-        where: baseWhere,
-        include: includePayload,
-        orderBy: { updatedAt: 'desc' },
-      });
-    }
-
-    // ✅ FIX: Gunakan Enum
-    if (userDivision === Division.Manager) {
-      baseWhere.status = Status.inReviewManager;
-      return this.prisma.document.findMany({
-        where: baseWhere,
-        include: includePayload,
-        orderBy: { updatedAt: 'desc' },
-      });
-    }
-
-    throw new ForbiddenException('Division not permitted to view this list');
+  // Helper function to convert hex color to RGB
+  private hexToRgb(hex: string) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result
+      ? {
+          r: parseInt(result[1], 16) / 255,
+          g: parseInt(result[2], 16) / 255,
+          b: parseInt(result[3], 16) / 255,
+        }
+      : { r: 0, g: 0, b: 0 };
   }
 
   // === GET HISTORY (HANYA DOKUMEN SELESAI) ===
@@ -323,14 +713,12 @@ export class DocumentService {
       throw new BadRequestException('User ID not found in token');
     }
 
-    // ✅ FIX: Gunakan Enum
     const finishedStatuses = [
       Status.approved,
       Status.approvedWithNotes,
       Status.rejected,
     ];
 
-    // ✅ FIX: Gunakan Enum
     if (userDivision === Division.Vendor) {
       return this.prisma.document.findMany({
         where: {
@@ -338,8 +726,9 @@ export class DocumentService {
           status: { in: finishedStatuses },
         },
         include: {
+          submittedBy: { select: { id: true, name: true } },
           approvals: {
-            orderBy: { createdAt: 'desc' }, // ✅ FIX: Hapus `as const`
+            orderBy: { createdAt: 'desc' },
             include: {
               approvedBy: {
                 select: { id: true, name: true },
@@ -355,7 +744,6 @@ export class DocumentService {
       });
     }
 
-    // ✅ FIX: Gunakan Enum
     if (
       [Division.Dalkon, Division.Engineer, Division.Manager].includes(
         userDivision,
@@ -371,7 +759,7 @@ export class DocumentService {
         },
         include: {
           approvals: {
-            orderBy: { createdAt: 'desc' }, // ✅ FIX: Hapus `as const`
+            orderBy: { createdAt: 'desc' },
             include: {
               approvedBy: {
                 select: { id: true, name: true },
@@ -398,11 +786,11 @@ export class DocumentService {
       where: { id: docId },
       include: {
         approvals: {
-          orderBy: { createdAt: 'asc' }, // ✅ FIX
+          orderBy: { createdAt: 'asc' },
           include: { approvedBy: { select: { id: true, name: true } } },
         },
         versions: {
-          orderBy: { version: 'asc' }, // ✅ FIX
+          orderBy: { version: 'asc' },
           include: { uploadedBy: { select: { id: true, name: true } } },
         },
         submittedBy: { select: { id: true, name: true, email: true } },
@@ -413,12 +801,12 @@ export class DocumentService {
     if (!doc) throw new NotFoundException('Document not found');
 
     // Otorisasi
-    // ✅ FIX: Gunakan Enum
     if (user.division === Division.Vendor && doc.submittedById !== user.id) {
-      throw new ForbiddenException('You are not authorized to view this document');
+      throw new ForbiddenException(
+        'You are not authorized to view this document',
+      );
     }
 
-    // ✅ FIX: Gunakan Enum
     if (
       ![
         Division.Vendor,
@@ -427,7 +815,9 @@ export class DocumentService {
         Division.Manager,
       ].includes(user.division)
     ) {
-      throw new ForbiddenException('You are not authorized to view this document');
+      throw new ForbiddenException(
+        'You are not authorized to view this document',
+      );
     }
 
     return doc;
@@ -442,36 +832,77 @@ export class DocumentService {
 
   private async updateStatus(
     docId: number,
-    status: Status, // ✅ FIX: Gunakan Enum
+    status: Status,
     reviewerId: number,
     notes?: string,
+    returnRequestedBy?: Division,
   ) {
-    if (!reviewerId) {
-      throw new BadRequestException('Reviewer ID is invalid');
-    }
+    const updateData: any = {
+      status,
+      reviewedById: reviewerId,
+      progress: { push: notes || `Status: ${status}` },
+    };
 
-    const doc = await this.getDocument(docId);
-    const newProgress = notes || `Status updated to ${status}`;
+    if (status === Status.returnForCorrection) {
+      updateData.returnRequestedBy = returnRequestedBy || null;
+    }
 
     return this.prisma.document.update({
       where: { id: docId },
-      data: {
-        status,
-        reviewedById: reviewerId,
-        progress: {
-          push: newProgress,
-        },
-        approvals: {
-          create: {
-            status,
-            approvedById: reviewerId,
-            type: doc.documentType || ApprovalType.civil, // ✅ FIX: Enum
-            notes,
-            deadline: new Date(new Date().setDate(new Date().getDate() + 7)),
-          },
-        },
-      },
-      include: { approvals: true },
+      data: updateData,
+      include: { approvals: true, versions: true },
     });
+  }
+
+  // === GET FILE (BARU) ===
+  async getDocumentFile(docId: number, user: any) {
+    // 1. Ambil data dokumen (termasuk otorisasi)
+    const doc = await this.getById(docId, user);
+
+    if (!doc.filePath) {
+      throw new NotFoundException('Document does not have a file path');
+    }
+
+    // 2. Buat path absolut
+    // Ini menggabungkan /home/user/proyek-nestjs + uploads/file.pdf
+    const normalizedPath = doc.filePath.startsWith('/')
+      ? doc.filePath.slice(1)
+      : doc.filePath;
+    const filePath = path.resolve(process.cwd(), normalizedPath);
+
+    // 3. Cek apakah file ada
+    if (!fs.existsSync(filePath)) {
+      // Log ini akan muncul di terminal NestJS Anda
+      console.error(`File not found at path: ${filePath}`);
+      console.error(`(process.cwd() is: ${process.cwd()})`);
+      console.error(`(doc.filePath is: ${doc.filePath})`);
+      throw new NotFoundException('File not found on server. Check logs.');
+    }
+
+    // 4. Kembalikan path dan nama file
+    return {
+      filePath,
+      fileName: doc.name,
+    };
+  }
+
+  async getDocumentFileForUser(docId: number, user: any) {
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: { filePath: true, name: true, submittedById: true },
+    });
+
+    if (!doc || !doc.filePath) {
+      throw new NotFoundException('Dokumen atau file tidak ditemukan');
+    }
+
+    // if (user.division === Division.Vendor && doc.submittedById !== user.id) {
+    //   throw new ForbiddenException('Akses ditolak');
+    // }
+
+    return {
+      filePath: doc.filePath,
+      fileName: doc.name || `document-${docId}`,
+    };
   }
 }
