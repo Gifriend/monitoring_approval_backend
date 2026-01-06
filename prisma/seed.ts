@@ -22,8 +22,8 @@ async function main() {
       create: {
         email: "manager@example.com",
         name: "John Manager",
-        password: passwordHash, // ✅ FIX: Menggunakan password yang di-hash
-        division: Division.Manager, // ✅ FIX: Menggunakan Enum
+        password: passwordHash, //   FIX: Menggunakan password yang di-hash
+        division: Division.Manager, //   FIX: Menggunakan Enum
       },
     }),
     prisma.user.upsert({
@@ -33,7 +33,7 @@ async function main() {
         email: "dalkon@example.com",
         name: "Jane Dalkon",
         password: passwordHash,
-        division: Division.Dalkon, // ✅ FIX: Menggunakan Enum
+        division: Division.Dalkon, //   FIX: Menggunakan Enum
       },
     }),
     prisma.user.upsert({
@@ -43,7 +43,7 @@ async function main() {
         email: "engineer@example.com",
         name: "Bob Engineer",
         password: passwordHash,
-        division: Division.Engineer, // ✅ FIX: Menggunakan Enum
+        division: Division.Engineer, //   FIX: Menggunakan Enum
       },
     }),
     prisma.user.upsert({
@@ -53,7 +53,7 @@ async function main() {
         email: "vendor@example.com",
         name: "Alice Vendor",
         password: passwordHash,
-        division: Division.Vendor, // ✅ FIX: Menggunakan Enum
+        division: Division.Vendor, //   FIX: Menggunakan Enum
       },
     }),
     prisma.user.upsert({
@@ -63,7 +63,7 @@ async function main() {
         email: "vendor2@example.com",
         name: "Victor Vendor",
         password: passwordHash,
-        division: Division.Vendor, // ✅ FIX: Menggunakan Enum
+        division: Division.Vendor, //   FIX: Menggunakan Enum
       },
     }),
   ]);
@@ -94,23 +94,23 @@ async function main() {
   // === DOCUMENTS ===
   console.log("Creating documents...");
 
-  // ✅ FIX: Logika pembuatan dokumen disesuaikan dengan schema.prisma
+  //   FIX: Logika pembuatan dokumen disesuaikan dengan schema.prisma
   // (Menambahkan latestVersion, progress, dan relasi versions)
 
   const doc1 = await prisma.document.create({
     data: {
       name: "Dokumen Baru (untuk Dalkon)",
       filePath: "/uploads/doc1.pdf",
-      latestVersion: 1, // ✅ FIX: Sesuai schema
-      status: Status.submitted, // ✅ FIX: Menggunakan Enum
-      progress: ["Submitted by vendor"], // ✅ FIX: Sesuai schema (array)
+      latestVersion: 1, //   FIX: Sesuai schema
+      status: Status.submitted, //   FIX: Menggunakan Enum
+      progress: ["Submitted by vendor"], //   FIX: Sesuai schema (array)
       overallDeadline: new Date("2025-11-15"),
-      documentType: ApprovalType.protection, // ✅ FIX: Menggunakan Enum
+      documentType: ApprovalType.protection, //   FIX: Menggunakan Enum
       contractId: contract1.id,
       submittedById: vendor.id,
       remarks: "Submission awal, menunggu review Dalkon",
       versions: {
-        // ✅ FIX: Buat catatan versi awal
+        //   FIX: Buat catatan versi awal
         create: {
           filePath: "/uploads/doc1.pdf",
           version: 1,
@@ -125,10 +125,10 @@ async function main() {
       name: "Dokumen Review Engineer (untuk Engineer)",
       filePath: "/uploads/doc2.pdf",
       latestVersion: 1,
-      status: Status.inReviewEngineering, // ✅ FIX: Menggunakan Enum
+      status: Status.inReviewEngineering, //   FIX: Menggunakan Enum
       progress: ["Submitted by vendor", "Forwarded to Engineering"],
       overallDeadline: new Date("2025-11-20"),
-      documentType: ApprovalType.civil, // ✅ FIX: Menggunakan Enum
+      documentType: ApprovalType.civil, //   FIX: Menggunakan Enum
       contractId: contract2.id,
       submittedById: vendor.id,
       reviewedById: dalkon.id,
@@ -147,8 +147,8 @@ async function main() {
     data: {
       name: "Dokumen Disetujui (untuk histori)",
       filePath: "/uploads/doc3_v2.pdf", // File v2 adalah yang terbaru
-      latestVersion: 2, // ✅ FIX: Versi terbaru adalah 2
-      status: Status.approved, // ✅ FIX: Menggunakan Enum
+      latestVersion: 2, //   FIX: Versi terbaru adalah 2
+      status: Status.approved, //   FIX: Menggunakan Enum
       progress: [
         "Submitted by vendor",
         "Returned by Engineer",
@@ -157,13 +157,13 @@ async function main() {
         "Approved by Engineer",
       ],
       overallDeadline: new Date("2025-09-30"),
-      documentType: ApprovalType.protection, // ✅ FIX: Menggunakan Enum
+      documentType: ApprovalType.protection, //   FIX: Menggunakan Enum
       contractId: contract1.id,
       submittedById: vendor2.id,
       reviewedById: engineer.id,
       remarks: "Final version approved",
       versions: {
-        // ✅ FIX: Buat 2 catatan versi
+        //   FIX: Buat 2 catatan versi
         create: [
           {
             filePath: "/uploads/doc3_v1.pdf",
@@ -185,14 +185,14 @@ async function main() {
       name: "Dokumen Dikembalikan (untuk Vendor/Dalkon)",
       filePath: "/uploads/doc4.pdf",
       latestVersion: 1,
-      status: Status.returnForCorrection, // ✅ FIX: Menggunakan Enum
+      status: Status.returnForCorrection, //   FIX: Menggunakan Enum
       progress: [
         "Submitted by vendor",
         "Forwarded to Engineer",
         "Returned for correction",
       ],
       overallDeadline: new Date("2025-11-05"),
-      documentType: ApprovalType.civil, // ✅ FIX: Menggunakan Enum
+      documentType: ApprovalType.civil, //   FIX: Menggunakan Enum
       contractId: contract2.id,
       submittedById: vendor2.id,
       reviewedById: engineer.id,
@@ -212,10 +212,10 @@ async function main() {
       name: "Dokumen Ditolak (untuk histori)",
       filePath: "/uploads/doc5.pdf",
       latestVersion: 1,
-      status: Status.rejected, // ✅ FIX: Menggunakan Enum
+      status: Status.rejected, //   FIX: Menggunakan Enum
       progress: ["Submitted by vendor", "Rejected by Dalkon"],
       overallDeadline: new Date("2025-10-01"),
-      documentType: ApprovalType.protection, // ✅ FIX: Menggunakan Enum
+      documentType: ApprovalType.protection, //   FIX: Menggunakan Enum
       contractId: contract1.id,
       submittedById: vendor.id,
       reviewedById: dalkon.id,
@@ -238,9 +238,9 @@ async function main() {
     prisma.approval.create({
       data: {
         documentId: doc2.id,
-        type: ApprovalType.civil, // ✅ FIX: Menggunakan Enum
+        type: ApprovalType.civil, //   FIX: Menggunakan Enum
         approvedById: dalkon.id,
-        status: Status.inReviewEngineering, // ✅ FIX: Menggunakan Enum
+        status: Status.inReviewEngineering, //   FIX: Menggunakan Enum
         notes: "Diteruskan ke Engineer untuk review teknis.",
         deadline: new Date("2025-10-10"),
       },
@@ -250,9 +250,9 @@ async function main() {
     prisma.approval.create({
       data: {
         documentId: doc3.id,
-        type: ApprovalType.protection, // ✅ FIX: Menggunakan Enum
+        type: ApprovalType.protection, //   FIX: Menggunakan Enum
         approvedById: dalkon.id,
-        status: Status.inReviewEngineering, // ✅ FIX: Menggunakan Enum
+        status: Status.inReviewEngineering, //   FIX: Menggunakan Enum
         notes: "Review Dalkon OK.",
         deadline: new Date("2025-09-20"),
       },
@@ -260,9 +260,9 @@ async function main() {
     prisma.approval.create({
       data: {
         documentId: doc3.id,
-        type: ApprovalType.protection, // ✅ FIX: Menggunakan Enum
+        type: ApprovalType.protection, //   FIX: Menggunakan Enum
         approvedById: engineer.id,
-        status: Status.approved, // ✅ FIX: Menggunakan Enum
+        status: Status.approved, //   FIX: Menggunakan Enum
         notes: "Final approval dari Engineer.",
         deadline: new Date("2025-09-25"),
       },
@@ -272,9 +272,9 @@ async function main() {
     prisma.approval.create({
       data: {
         documentId: doc4.id,
-        type: ApprovalType.civil, // ✅ FIX: Menggunakan Enum
+        type: ApprovalType.civil, //   FIX: Menggunakan Enum
         approvedById: engineer.id,
-        status: Status.returnForCorrection, // ✅ FIX: Menggunakan Enum
+        status: Status.returnForCorrection, //   FIX: Menggunakan Enum
         notes: "Perlu revisi perhitungan di hal. 5",
         deadline: new Date("2025-10-12"),
       },
@@ -284,9 +284,9 @@ async function main() {
     prisma.approval.create({
       data: {
         documentId: doc5.id,
-        type: ApprovalType.protection, // ✅ FIX: Menggunakan Enum
+        type: ApprovalType.protection, //   FIX: Menggunakan Enum
         approvedById: dalkon.id,
-        status: Status.rejected, // ✅ FIX: Menggunakan Enum
+        status: Status.rejected, //   FIX: Menggunakan Enum
         notes: "Sudah tidak relevan dengan proyek.",
         deadline: new Date("2025-09-28"),
       },
@@ -294,12 +294,12 @@ async function main() {
   ]);
   console.log("Approval history created.");
 
-  console.log("✅ Seeding completed successfully!");
+  console.log("  Seeding completed successfully!");
 }
 
 main()
   .catch((e) => {
-    console.error("❌ Error seeding database:", e);
+    console.error(" Error seeding database:", e);
     process.exit(1);
   })
   .finally(async () => {

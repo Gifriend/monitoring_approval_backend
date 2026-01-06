@@ -208,7 +208,7 @@ export class DocumentService {
       select: { latestVersion: true },
     });
 
-    const annotationVersion = doc!.latestVersion + 100; // biar beda jauh dari versi resmi
+    const annotationVersion = doc!.latestVersion + 100; // Just for tracking
 
     return this.prisma.documentVersion.create({
       data: {
@@ -216,7 +216,6 @@ export class DocumentService {
         filePath,
         version: annotationVersion,
         uploadedById,
-        // Bisa tambah field khusus kalau perlu, tapi cukup di notes
       },
     });
   }
@@ -228,6 +227,7 @@ export class DocumentService {
     action: string,
     notes?: string,
     annotations?: any[],
+    uploadedFilePath?: string,
   ) {
     if (user.division !== Division.Dalkon)
       throw new ForbiddenException('Only Dalkon');
@@ -235,9 +235,8 @@ export class DocumentService {
     const doc = await this.prisma.document.findUnique({ where: { id: docId } });
     if (!doc) throw new NotFoundException();
 
-    // Merge annotations if provided
-    let annotatedFilePath: string | undefined;
-    if (annotations && annotations.length > 0) {
+    let annotatedFilePath: string | undefined = uploadedFilePath;
+    if (!annotatedFilePath && annotations && annotations.length > 0) {
       annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
@@ -245,21 +244,55 @@ export class DocumentService {
     let logMessage = '';
 
     if (action === 'approve') {
-      if (doc.status === Status.submitted) {
+      if (doc.status === Status.submitted && !doc.returnRequestedBy) {
+        // Dokumen baru dari vendor → Forward ke Engineer
         newStatus = Status.inReviewEngineering;
-        logMessage = 'Forwarded to Engineering';
+        logMessage = notes || 'Dalkon forwarded to Engineering';
       } else if (
-        [Status.approved, Status.approvedWithNotes].includes(doc.status as any)
+        doc.status === Status.submitted &&
+        doc.returnRequestedBy === Division.Engineer
       ) {
+        // Dokumen dikembalikan dari Engineer
+        // Dalkon setuju dengan Engineer dan forward ke vendor
+        newStatus = Status.returnForCorrection;
+        logMessage =
+          notes || 'Dalkon confirmed Engineer return - forwarding to Vendor';
+      } else if (
+        doc.status === Status.submitted &&
+        doc.returnRequestedBy === Division.Manager
+      ) {
+        // Dokumen dikembalikan dari Manager
+        newStatus = Status.returnForCorrection;
+        logMessage =
+          notes || 'Dalkon confirmed Manager return - forwarding to Vendor';
+      } else if (doc.status === Status.approved) {
+        // Setelah Engineer approve → Forward ke Manager
         newStatus = Status.inReviewManager;
-        logMessage = 'Forwarded to Manager';
+        logMessage = notes || 'Dalkon forwarded to Manager';
+      } else if (doc.status === Status.inReviewConsultant) {
+        // Setelah Manager approve → Final approval
+        newStatus = Status.approved;
+        logMessage = notes || 'Final approval by Dalkon - Document complete';
+      } else if (doc.status === Status.approvedWithNotes) {
+        // Engineer approve with notes → Forward ke Manager
+        newStatus = Status.inReviewManager;
+        logMessage =
+          notes || 'Dalkon forwarded to Manager (with notes from Engineer)';
       } else {
-        throw new BadRequestException('Invalid status for approve');
+        throw new BadRequestException(
+          `Invalid status for Dalkon approve: ${doc.status}`,
+        );
       }
     } else if (action === 'returnForCorrection') {
+      // Dalkon bisa langsung return ke vendor kapan saja
       newStatus = Status.returnForCorrection;
-      logMessage = notes || 'Returned by Dalkon';
+      logMessage = notes || 'Returned by Dalkon for correction';
     } else if (action === 'reject') {
+      if (doc.status !== Status.submitted) {
+        throw new BadRequestException(
+          'Dalkon can only reject at submitted stage',
+        );
+      }
       newStatus = Status.rejected;
       logMessage = notes || 'Rejected by Dalkon';
     } else {
@@ -296,6 +329,7 @@ export class DocumentService {
     action: string,
     notes?: string,
     annotations?: any[],
+    uploadedFilePath?: string,
   ) {
     if (user.division !== Division.Engineer)
       throw new ForbiddenException('Only Engineer');
@@ -303,9 +337,12 @@ export class DocumentService {
     const doc = await this.prisma.document.findUnique({ where: { id: docId } });
     if (!doc) throw new NotFoundException();
 
-    // Merge annotations if provided
-    let annotatedFilePath: string | undefined;
-    if (annotations && annotations.length > 0) {
+    if (doc.status !== Status.inReviewEngineering) {
+      throw new BadRequestException('Document not in engineering review stage');
+    }
+
+    let annotatedFilePath: string | undefined = uploadedFilePath;
+    if (!annotatedFilePath && annotations && annotations.length > 0) {
       annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
@@ -315,15 +352,17 @@ export class DocumentService {
     switch (action) {
       case 'approve':
         newStatus = Status.approved;
-        logMessage = notes || 'Approved by Engineer';
+        logMessage = notes || 'Approved by Engineer - returning to Dalkon';
         break;
       case 'approveWithNotes':
         newStatus = Status.approvedWithNotes;
-        logMessage = notes || 'Approved with notes';
+        logMessage =
+          notes || 'Approved with notes by Engineer - returning to Dalkon';
         break;
       case 'returnForCorrection':
-        newStatus = Status.returnForCorrection;
-        logMessage = notes || 'Returned by Engineer';
+        //   PERBAIKAN: Kembali ke Dalkon dulu (status submitted)
+        newStatus = Status.submitted;
+        logMessage = notes || 'Returned by Engineer - pending Dalkon review';
         break;
       default:
         throw new BadRequestException('Invalid action');
@@ -359,17 +398,18 @@ export class DocumentService {
     action: string,
     notes?: string,
     annotations?: any[],
+    uploadedFilePath?: string,
   ) {
     if (user.division !== Division.Manager)
       throw new ForbiddenException('Only Manager');
 
     const doc = await this.prisma.document.findUnique({ where: { id: docId } });
-    if (!doc || doc.status !== Status.inReviewManager)
-      throw new BadRequestException('Document not in manager review');
 
-    // Merge annotations if provided
-    let annotatedFilePath: string | undefined;
-    if (annotations && annotations.length > 0) {
+    if (!doc || doc.status !== Status.inReviewManager)
+      throw new BadRequestException('Document not in manager review stage');
+
+    let annotatedFilePath: string | undefined = uploadedFilePath;
+    if (!annotatedFilePath && annotations && annotations.length > 0) {
       annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
@@ -377,11 +417,13 @@ export class DocumentService {
     let logMessage = '';
 
     if (action === 'approve') {
-      newStatus = Status.approved;
-      logMessage = notes || 'Approved by Manager';
+      newStatus = Status.inReviewConsultant;
+      logMessage =
+        notes || 'Approved by Manager - returning to Dalkon for final approval';
     } else if (action === 'returnForCorrection') {
-      newStatus = Status.returnForCorrection;
-      logMessage = notes || 'Returned by Manager';
+      //   PERBAIKAN: Kembali ke Dalkon dulu (status submitted)
+      newStatus = Status.submitted;
+      logMessage = notes || 'Returned by Manager - pending Dalkon review';
     } else {
       throw new BadRequestException('Invalid action');
     }
@@ -461,6 +503,7 @@ export class DocumentService {
       Status.rejected,
     ];
 
+    //   VENDOR - Lihat dokumen yang masih dalam proses
     if (user.division === Division.Vendor) {
       return this.prisma.document.findMany({
         where: {
@@ -475,6 +518,7 @@ export class DocumentService {
         },
         include: {
           submittedBy: { select: { id: true, name: true } },
+          reviewedBy: { select: { id: true, name: true, division: true } },
           contract: { select: { contractNumber: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
@@ -483,23 +527,89 @@ export class DocumentService {
       });
     }
 
-    // Dalkon, Engineer, Manager lihat sesuai haknya
-    const where: any = { status: { notIn: finished } };
-    if (user.division === Division.Engineer)
-      where.status = Status.inReviewEngineering;
-    if (user.division === Division.Manager)
-      where.status = Status.inReviewManager;
+    //   DALKON - Lihat dokumen yang perlu action (exclude final approved)
+    if (user.division === Division.Dalkon) {
+      const dalkonUsers = await this.prisma.user.findMany({
+        where: { division: Division.Dalkon },
+        select: { id: true },
+      });
+      const dalkonUserIds = dalkonUsers.map((u) => u.id);
 
-    return this.prisma.document.findMany({
-      where,
-      include: {
-        submittedBy: { select: { id: true, name: true } },
-        contract: { select: { contractNumber: true } },
-        approvals: { take: 1, orderBy: { createdAt: 'desc' } },
-        versions: { orderBy: { version: 'desc' }, take: 1 },
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
+      return this.prisma.document.findMany({
+        where: {
+          status: {
+            notIn: [Status.rejected],
+          },
+          OR: [
+            {
+              //   Semua dokumen submitted (dari Vendor atau dikembalikan dari Engineer/Manager)
+              status: Status.submitted,
+            },
+            {
+              // Approved dari Engineer (bukan final approval Dalkon)
+              AND: [
+                { status: Status.approved },
+                { reviewedById: { notIn: dalkonUserIds } },
+              ],
+            },
+            {
+              // ApprovedWithNotes dari Engineer
+              AND: [
+                { status: Status.approvedWithNotes },
+                { reviewedById: { notIn: dalkonUserIds } },
+              ],
+            },
+            { status: Status.inReviewConsultant }, // Dari Manager, perlu final approval
+            { status: Status.inReviewEngineering }, // Monitoring Engineer
+            { status: Status.inReviewManager }, // Monitoring Manager
+          ],
+        },
+        include: {
+          submittedBy: { select: { id: true, name: true } },
+          reviewedBy: { select: { id: true, name: true, division: true } },
+          contract: { select: { contractNumber: true } },
+          approvals: { take: 1, orderBy: { createdAt: 'desc' } },
+          versions: { orderBy: { version: 'desc' }, take: 1 },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+    }
+
+    //   ENGINEER - Just see dokumen that in-review Engineering
+    if (user.division === Division.Engineer) {
+      return this.prisma.document.findMany({
+        where: {
+          status: Status.inReviewEngineering,
+        },
+        include: {
+          submittedBy: { select: { id: true, name: true } },
+          reviewedBy: { select: { id: true, name: true, division: true } }, 
+          contract: { select: { contractNumber: true } },
+          approvals: { take: 1, orderBy: { createdAt: 'desc' } },
+          versions: { orderBy: { version: 'desc' }, take: 1 },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+    }
+
+    //   MANAGER - Hanya lihat dokumen yang sedang di-review Manager
+    if (user.division === Division.Manager) {
+      return this.prisma.document.findMany({
+        where: {
+          status: Status.inReviewManager,
+        },
+        include: {
+          submittedBy: { select: { id: true, name: true } },
+          reviewedBy: { select: { id: true, name: true, division: true } }, 
+          contract: { select: { contractNumber: true } },
+          approvals: { take: 1, orderBy: { createdAt: 'desc' } },
+          versions: { orderBy: { version: 'desc' }, take: 1 },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+    }
+
+    throw new ForbiddenException('Division not permitted to view documents');
   }
 
   async getVendorPendingCorrection(user: any) {
@@ -526,56 +636,59 @@ export class DocumentService {
   }
 
   async updateDocumentFile(userId: number, docId: number, filePath: string) {
-  const user = await this.prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw new NotFoundException('User not found');
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
 
-  const doc = await this.prisma.document.findUnique({ 
-    where: { id: docId },
-    select: { 
-      id: true, 
-      latestVersion: true, 
-      submittedById: true,
-      status: true 
-    }
-  });
-  
-  if (!doc) throw new NotFoundException('Document not found');
-
-  // Cek otorisasi
-  const isReviewer = ([Division.Dalkon, Division.Engineer, Division.Manager] as Division[]).includes(user.division);
-  const isOwner = user.division === Division.Vendor && doc.submittedById === userId;
-  
-  if (!isReviewer && !isOwner) {
-    throw new ForbiddenException('Not authorized to update this document');
-  }
-
-  // Buat versi baru dengan nomor yang sama (overwrite preview)
-  const newVersion = doc.latestVersion;
-
-  // Update document dengan file baru
-  return this.prisma.document.update({
-    where: { id: docId },
-    data: {
-      filePath,
-      progress: {
-        push: `File updated by ${user.division}`,
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: {
+        id: true,
+        latestVersion: true,
+        submittedById: true,
+        status: true,
       },
-      versions: {
-        create: {
-          filePath: filePath,
-          version: newVersion + 0.1, // 1.1, 2.1, dst untuk preview
-          uploadedById: userId,
+    });
+
+    if (!doc) throw new NotFoundException('Document not found');
+
+    // Cek otorisasi
+    const isReviewer = (
+      [Division.Dalkon, Division.Engineer, Division.Manager] as Division[]
+    ).includes(user.division);
+    const isOwner =
+      user.division === Division.Vendor && doc.submittedById === userId;
+
+    if (!isReviewer && !isOwner) {
+      throw new ForbiddenException('Not authorized to update this document');
+    }
+
+    // Buat versi baru dengan nomor yang sama (overwrite preview)
+    const newVersion = doc.latestVersion;
+
+    // Update document dengan file baru
+    return this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        filePath,
+        progress: {
+          push: `File updated by ${user.division}`,
+        },
+        versions: {
+          create: {
+            filePath: filePath,
+            version: newVersion + 0.1, // 1.1, 2.1, dst untuk preview
+            uploadedById: userId,
+          },
         },
       },
-    },
-    include: {
-      versions: { orderBy: { version: 'desc' }, take: 5 },
-      submittedBy: { select: { id: true, name: true } },
-    }
-  });
-}
+      include: {
+        versions: { orderBy: { version: 'desc' }, take: 5 },
+        submittedBy: { select: { id: true, name: true } },
+      },
+    });
+  }
 
-async saveAnnotations(
+  async saveAnnotations(
     userId: number,
     docId: number,
     annotations: any[],
@@ -651,7 +764,7 @@ async saveAnnotations(
         // Decode base64 stamp image
         const base64Data = ann.stampImage.split(',')[1];
         const imageBuffer = Buffer.from(base64Data, 'base64');
-        
+
         let stampImg;
         if (ann.stampImage.includes('image/png')) {
           stampImg = await pdfDoc.embedPng(imageBuffer);

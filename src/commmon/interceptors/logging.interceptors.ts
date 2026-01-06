@@ -26,7 +26,7 @@ export class LoggingInterceptor implements NestInterceptor {
       tap((data) => {
         const duration = Date.now() - start;
         this.logger.log(
-          `✅ Response: ${method} ${originalUrl} — ${duration}ms — result: ${JSON.stringify(
+          `  Response: ${method} ${originalUrl} — ${duration}ms — result: ${JSON.stringify(
             data,
           )}`,
         );
@@ -34,7 +34,7 @@ export class LoggingInterceptor implements NestInterceptor {
       catchError((error) => {
         const duration = Date.now() - start;
         this.logger.error(
-          `❌ Error: ${method} ${originalUrl} — ${duration}ms — ${error.message}`,
+          ` Error: ${method} ${originalUrl} — ${duration}ms — ${error.message}`,
           error.stack,
         );
         return throwError(() => error);

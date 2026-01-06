@@ -47,7 +47,7 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        // ✅ PERBAIKAN: Simpan ke folder 'uploads' di root proyek
+        //   PERBAIKAN: Simpan ke folder 'uploads' di root proyek
         destination: (req, file, callback) => {
           const uploadPath = ensureUploadsDir();
           callback(null, uploadPath);
@@ -98,7 +98,7 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        // ✅ PERBAIKAN: Simpan ke folder 'uploads' di root proyek
+        //   PERBAIKAN: Simpan ke folder 'uploads' di root proyek
         destination: (req, file, callback) => {
           const uploadPath = ensureUploadsDir();
           callback(null, uploadPath);
@@ -126,61 +126,155 @@ export class DocumentController {
 
   // === REVIEW HANDLERS ===
   @Patch(':id/dalkon-review')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: () => ensureUploadsDir(),
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `annotated-${unique}${extname(file.originalname)}`);
+        },
+      }),
+    }),
+  )
   async dalkonReview(
     @Request() req,
     @Param('id') id: number,
-    @Body() body: { 
-      action: string; 
-      notes?: string;
-      annotations?: any[];
-    },
+    @UploadedFile() file?: Express.Multer.File,
   ) {
+    //   Debug logging untuk troubleshooting
+    console.log(' [Dalkon] req.body =', req.body);
+    console.log(' [Dalkon] file =', file?.originalname);
+
+    // Take from req.body because using
+    //
+    FormData;
+    const action = req.body?.action;
+    const notes = req.body?.notes;
+
+    // Parse annotations using try/catch
+    let annotations: any[] | undefined;
+    if (req.body?.annotations) {
+      try {
+        annotations = JSON.parse(req.body.annotations);
+      } catch (error) {
+        throw new BadRequestException('Invalid annotations JSON format');
+      }
+    }
+
+    // Validate field
+    if (!action) {
+      throw new BadRequestException('Action is required');
+    }
+
     return this.documentService.dalkonReview(
       req.user,
       +id,
-      body.action,
-      body.notes,
-      body.annotations,
+      action,
+      notes,
+      annotations,
+      file ? `uploads/${file.filename}` : undefined,
     );
   }
 
   // ENGINEERING REVIEW
   @Patch(':id/engineering-review')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: () => ensureUploadsDir(),
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `annotated-${unique}${extname(file.originalname)}`);
+        },
+      }),
+    }),
+  )
   async engineeringReview(
     @Request() req,
     @Param('id') id: number,
-    @Body() body: { 
-      action: string; 
-      notes?: string;
-      annotations?: any[];
-    },
+    @UploadedFile() file?: Express.Multer.File,
   ) {
+    console.log('  [Engineering] req.body =', req.body);
+    console.log('  [Engineering] file =', file?.originalname);
+
+    // Take from req.body because using formdata
+    const action = req.body?.action;
+    const notes = req.body?.notes;
+
+    // Parse annotations dengan try/catch
+    let annotations: any[] | undefined;
+    if (req.body?.annotations) {
+      try {
+        annotations = JSON.parse(req.body.annotations);
+      } catch (error) {
+        throw new BadRequestException('Invalid annotations JSON format');
+      }
+    }
+
+    // Validasi field wajib
+    if (!action) {
+      throw new BadRequestException('Action is required');
+    }
+
     return this.documentService.engineeringReview(
       req.user,
       +id,
-      body.action,
-      body.notes,
-      body.annotations,
+      action,
+      notes,
+      annotations,
+      file ? `uploads/${file.filename}` : undefined,
     );
   }
 
   // MANAGER REVIEW
   @Patch(':id/manager-review')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: () => ensureUploadsDir(),
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `annotated-${unique}${extname(file.originalname)}`);
+        },
+      }),
+    }),
+  )
   async managerReview(
     @Request() req,
     @Param('id') id: number,
-    @Body() body: { 
-      action: string; 
-      notes?: string;
-      annotations?: any[];
-    },
+    @UploadedFile() file?: Express.Multer.File,
   ) {
+    //   Debug logging untuk troubleshooting
+    console.log('  [Manager] req.body =', req.body);
+    console.log('  [Manager] file =', file?.originalname);
+
+    //   Ambil dari req.body langsung karena FormData
+    const action = req.body?.action;
+    const notes = req.body?.notes;
+
+    //   Parse annotations dengan try/catch
+    let annotations: any[] | undefined;
+    if (req.body?.annotations) {
+      try {
+        annotations = JSON.parse(req.body.annotations);
+      } catch (error) {
+        throw new BadRequestException('Invalid annotations JSON format');
+      }
+    }
+
+    //   Validasi field wajib
+    if (!action) {
+      throw new BadRequestException('Action is required');
+    }
+
     return this.documentService.managerReview(
       req.user,
       +id,
-      body.action,
-      body.notes,
-      body.annotations,
+      action,
+      notes,
+      annotations,
+      file ? `uploads/${file.filename}` : undefined,
     );
   }
 
@@ -240,7 +334,6 @@ export class DocumentController {
     );
   }
 
-
   // === GET DETAIL DOKUMEN (BESERTA SEMUA VERSI) ===
   @Get(':id')
   async getById(@Param('id') id: number, @Request() req) {
@@ -277,4 +370,3 @@ export class DocumentController {
     return new StreamableFile(fileStream);
   }
 }
-
