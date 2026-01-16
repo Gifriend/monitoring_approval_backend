@@ -167,7 +167,7 @@ export class DocumentService {
     docId: number,
     filePath: string,
     uploadedById: number,
-    reviewerDivision: Division,
+    reviewerDivision: 'Dalkon' | 'Engineer' | 'Manager',
   ) {
     const doc = await this.prisma.document.findUnique({
       where: { id: docId },
@@ -184,15 +184,6 @@ export class DocumentService {
         filePath,
         version: annotationVersion,
         uploadedById,
-      },
-    });
-
-    await this.prisma.document.update({
-      where: { id: docId },
-      data: {
-        progress: {
-          push: `${reviewerDivision} mengunggah versi anotasi`,
-        },
       },
     });
   }
@@ -305,7 +296,7 @@ export class DocumentService {
         status: newStatus,
         reviewedById: user.id,
         returnRequestedBy:
-          action === 'returnForCorrection' ? Division.Dalkon : undefined,
+          action === 'returnForCorrection' ? Division.Dalkon : null,
         progress: { push: logMessage },
       },
     });
@@ -337,8 +328,15 @@ export class DocumentService {
     const doc = await this.prisma.document.findUnique({ where: { id: docId } });
     if (!doc) throw new NotFoundException();
 
-    if (doc.status !== Status.inReviewEngineering) {
-      throw new BadRequestException('Document not in engineering review stage');
+    // ✅ PERBAIKAN: Engineer bisa review dokumen dengan status submitted atau inReviewEngineering
+    // Status submitted bisa muncul jika Dalkon belum forward, atau jika dikembalikan dari Manager
+    if (
+      doc.status !== Status.inReviewEngineering &&
+      doc.status !== Status.submitted
+    ) {
+      throw new BadRequestException(
+        `Document cannot be reviewed by Engineer at status: ${doc.status}. Expected: inReviewEngineering or submitted`,
+      );
     }
 
     let annotatedFilePath: string | undefined = uploadedFilePath;
@@ -452,44 +450,47 @@ export class DocumentService {
   }
 
   // === RESUBMIT VENDOR ===
-  async resubmit(userId: number, docId: number, filePath: string) {
-    if (!userId) {
-      throw new BadRequestException('Invalid user ID');
-    }
+  async resubmitSimple(userId: number, docId: number) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    if (user.division !== Division.Vendor)
+    if (user.division !== Division.Vendor) {
       throw new ForbiddenException('Only vendors can resubmit documents');
+    }
 
-    const doc = await this.getDocument(docId);
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: {
+        id: true,
+        submittedById: true,
+        status: true,
+        latestVersion: true,
+        filePath: true,
+      },
+    });
+
+    if (!doc) throw new NotFoundException('Document not found');
+
     if (doc.submittedById !== userId) {
       throw new ForbiddenException('You did not submit this document');
     }
+
     if (doc.status !== Status.returnForCorrection) {
       throw new BadRequestException(
         'Document cannot be resubmitted unless status is "returnForCorrection"',
       );
     }
 
-    const newVersion = doc.latestVersion + 1;
-
+    // ✅ Gunakan file yang sudah di-update dari saveAnnotations
+    // Tidak perlu create version baru karena file sudah ter-merge
     return this.prisma.document.update({
       where: { id: docId },
       data: {
-        filePath,
-        latestVersion: newVersion,
         status: Status.submitted,
         reviewedById: null,
+        returnRequestedBy: null,
         progress: {
-          push: 'Resubmitted by vendor',
-        },
-        versions: {
-          create: {
-            filePath: filePath,
-            version: newVersion,
-            uploadedById: userId,
-          },
+          push: `Vendor: Resubmitted with annotations (v${doc.latestVersion})`,
         },
       },
     });
@@ -583,7 +584,7 @@ export class DocumentService {
         },
         include: {
           submittedBy: { select: { id: true, name: true } },
-          reviewedBy: { select: { id: true, name: true, division: true } }, 
+          reviewedBy: { select: { id: true, name: true, division: true } },
           contract: { select: { contractNumber: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
@@ -600,7 +601,7 @@ export class DocumentService {
         },
         include: {
           submittedBy: { select: { id: true, name: true } },
-          reviewedBy: { select: { id: true, name: true, division: true } }, 
+          reviewedBy: { select: { id: true, name: true, division: true } },
           contract: { select: { contractNumber: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
@@ -694,33 +695,78 @@ export class DocumentService {
     annotations: any[],
     documentName: string,
   ) {
-    // 1. Find document
+    // 1. Find user
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // 2. Find document
     const document = await this.prisma.document.findUnique({
       where: { id: docId },
     });
 
     if (!document) {
-      throw new Error('Document not found');
+      throw new NotFoundException('Document not found');
     }
 
-    // 2. Read existing PDF file
-    const filePath = path.join(
-      process.cwd(),
-      'uploads',
-      path.basename(document.filePath),
-    );
+    // 3. ✅ VALIDASI OTORISASI
+    const isReviewer =
+      user.division === Division.Dalkon ||
+      user.division === Division.Engineer ||
+      user.division === Division.Manager;
+    const isOwner =
+      user.division === Division.Vendor && document.submittedById === userId;
+
+    if (!isReviewer && !isOwner) {
+      throw new ForbiddenException(
+        'You are not authorized to edit this document',
+      );
+    }
+
+    // 4. ✅ VALIDASI STATUS UNTUK VENDOR
+    if (
+      user.division === Division.Vendor &&
+      document.status !== Status.returnForCorrection
+    ) {
+      throw new BadRequestException(
+        'Vendor can only save annotations on documents with status "returnForCorrection"',
+      );
+    }
+
+    // 5. Read existing PDF file
+    // Handle both absolute and relative paths
+    let filePath: string;
+    if (path.isAbsolute(document.filePath)) {
+      // Path sudah absolute (e.g., D:\...\uploads\file.pdf)
+      filePath = document.filePath;
+    } else {
+      // Path relative (e.g., uploads/file.pdf)
+      const normalizedPath = document.filePath.startsWith('/')
+        ? document.filePath.slice(1)
+        : document.filePath;
+      filePath = path.resolve(process.cwd(), normalizedPath);
+    }
+
+    console.log('🔍 [saveAnnotations] Looking for file at:', filePath);
 
     if (!fs.existsSync(filePath)) {
-      throw new Error('File not found on server');
+      console.error('❌ File not found:', filePath);
+      console.error('   document.filePath from DB:', document.filePath);
+      console.error('   process.cwd():', process.cwd());
+      throw new NotFoundException('File not found on server');
     }
 
     const existingPdfBytes = fs.readFileSync(filePath);
 
-    // 3. Load PDF with pdf-lib
+    // 6. Load PDF with pdf-lib
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const pages = pdfDoc.getPages();
 
-    // 4. Process annotations and embed to PDF
+    // 7. Process annotations
     for (const ann of annotations) {
       const page = pages[ann.page - 1];
       if (!page) continue;
@@ -728,7 +774,6 @@ export class DocumentService {
       const { width, height } = page.getSize();
 
       if (ann.type === 'draw' && ann.path) {
-        // Create canvas untuk render annotation
         const { createCanvas } = require('canvas');
         const canvas = createCanvas(width, height);
         const ctx = canvas.getContext('2d');
@@ -740,28 +785,22 @@ export class DocumentService {
         ctx.beginPath();
 
         ann.path.forEach((p: any, i: number) => {
-          if (i === 0) {
-            ctx.moveTo(p.x, p.y);
-          } else {
-            ctx.lineTo(p.x, p.y);
-          }
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
         });
         ctx.stroke();
 
-        // Convert canvas to PNG and embed
         const pngImage = await pdfDoc.embedPng(canvas.toDataURL());
         page.drawImage(pngImage, { x: 0, y: 0, width, height });
       } else if (ann.type === 'text' && ann.text && ann.position) {
-        // Draw text directly on PDF
         const rgbColor = this.hexToRgb(ann.color || '#000000');
         page.drawText(ann.text, {
           x: ann.position.x,
-          y: height - ann.position.y, // Flip Y coordinate
+          y: height - ann.position.y,
           size: ann.fontSize || 20,
           color: rgb(rgbColor.r, rgbColor.g, rgbColor.b),
         });
       } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
-        // Decode base64 stamp image
         const base64Data = ann.stampImage.split(',')[1];
         const imageBuffer = Buffer.from(base64Data, 'base64');
 
@@ -781,7 +820,7 @@ export class DocumentService {
       }
     }
 
-    // 5. Save modified PDF
+    // 8. Save modified PDF
     const pdfBytes = await pdfDoc.save();
     const newFilename = `annotated-${Date.now()}-${path.basename(
       document.filePath,
@@ -790,18 +829,31 @@ export class DocumentService {
 
     fs.writeFileSync(newFilePath, pdfBytes);
 
-    // 6. Update database with new file path
+    // 9. ✅ PERBAIKAN: Update dengan RELATIVE PATH
+    const relativeFilePath = `uploads/${newFilename}`;
+
     await this.prisma.document.update({
       where: { id: docId },
       data: {
-        filePath: newFilePath,
+        filePath: relativeFilePath, // ✅ Simpan relative path (FIXED!)
         updatedAt: new Date(),
+        progress: {
+          push: `Annotations saved by ${user.division}`,
+        },
       },
+    });
+
+    console.log('✅ Annotations saved successfully:', {
+      docId,
+      userId,
+      division: user.division,
+      relativePath: relativeFilePath,
+      absolutePath: newFilePath,
     });
 
     return {
       message: 'Annotations saved successfully',
-      filePath: newFilePath,
+      filePath: relativeFilePath,
     };
   }
 
@@ -921,12 +973,14 @@ export class DocumentService {
     }
 
     if (
-      ![
-        Division.Vendor,
-        Division.Dalkon,
-        Division.Engineer,
-        Division.Manager,
-      ].includes(user.division)
+      !(
+        [
+          Division.Vendor,
+          Division.Dalkon,
+          Division.Engineer,
+          Division.Manager,
+        ] as Division[]
+      ).includes(user.division)
     ) {
       throw new ForbiddenException(
         'You are not authorized to view this document',
@@ -978,17 +1032,25 @@ export class DocumentService {
 
     // 2. Buat path absolut
     // Ini menggabungkan /home/user/proyek-nestjs + uploads/file.pdf
-    const normalizedPath = doc.filePath.startsWith('/')
-      ? doc.filePath.slice(1)
-      : doc.filePath;
-    const filePath = path.resolve(process.cwd(), normalizedPath);
+    let filePath: string;
+    if (path.isAbsolute(doc.filePath)) {
+      // Path sudah absolute (e.g., D:\...\uploads\file.pdf)
+      filePath = doc.filePath;
+    } else {
+      // Path relative (e.g., uploads/file.pdf)
+      const normalizedPath = doc.filePath.startsWith('/')
+        ? doc.filePath.slice(1)
+        : doc.filePath;
+      filePath = path.resolve(process.cwd(), normalizedPath);
+    }
+
+    console.log('🔍 [getDocumentFile] Looking for file at:', filePath);
 
     // 3. Cek apakah file ada
     if (!fs.existsSync(filePath)) {
-      // Log ini akan muncul di terminal NestJS Anda
-      console.error(`File not found at path: ${filePath}`);
-      console.error(`(process.cwd() is: ${process.cwd()})`);
-      console.error(`(doc.filePath is: ${doc.filePath})`);
+      console.error(`❌ File not found at path: ${filePath}`);
+      console.error(`   process.cwd() is: ${process.cwd()}`);
+      console.error(`   doc.filePath from DB is: ${doc.filePath}`);
       throw new NotFoundException('File not found on server. Check logs.');
     }
 

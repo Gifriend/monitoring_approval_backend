@@ -20,11 +20,11 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
 import { JwtAuthGuard } from '../auth/strategy/jwt-auth.guard';
-import { ApprovalType } from '@prisma/client';
+import { ApprovalType, Division } from '@prisma/client';
 import { diskStorage } from 'multer';
 import { extname, resolve } from 'path';
-import { Response } from 'express';
-import { createReadStream, existsSync, mkdirSync } from 'fs'; // <-- Import 'fs' helpers
+import type { Response } from 'express';
+import { createReadStream, existsSync, mkdirSync } from 'fs'; 
 
 // Helper untuk memastikan folder 'uploads' ada di root proyek
 const ensureUploadsDir = () => {
@@ -115,13 +115,13 @@ export class DocumentController {
   async resubmit(
     @Request() req,
     @Param('id') id: number,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
-    if (!file) {
-      throw new BadRequestException('File is required for resubmission');
-    }
-    const filePath = `uploads/${file.filename}`;
-    return this.documentService.resubmit(req.user.id, +id, filePath);
+    // if (!file) {
+    //   throw new BadRequestException('File is required for resubmission');
+    // }
+    // const filePath = `uploads/${file.filename}`;
+    return this.documentService.resubmitSimple(req.user.id, +id);
   }
 
   // === REVIEW HANDLERS ===
@@ -298,8 +298,62 @@ export class DocumentController {
     if (!file) throw new BadRequestException('File required');
     const filePath = `uploads/${file.filename}`;
     // Pakai logic resubmit yang sudah ada
-    return this.documentService.resubmit(req.user.id, +id, filePath);
+    return this.documentService.resubmitSimple(req.user.id, +id);
   }
+
+  // === VENDOR REVIEW (SUBMIT REVISION) ===
+@Patch(':id/vendor-review')
+@UseInterceptors(
+  FileInterceptor('file', {
+    storage: diskStorage({
+      destination: () => ensureUploadsDir(),
+      filename: (req, file, cb) => {
+        const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        cb(null, `vendor-revision-${unique}${extname(file.originalname)}`);
+      },
+    }),
+  }),
+)
+async vendorReview(
+  @Request() req,
+  @Param('id') id: number,
+  @UploadedFile() file?: Express.Multer.File,
+) {
+  console.log('📤 [Vendor] req.body =', req.body);
+  console.log('📄 [Vendor] file =', file?.originalname);
+
+  // Validasi user adalah vendor
+  if (req.user.division !== Division.Vendor) {
+    throw new ForbiddenException('Only vendors can submit revisions');
+  }
+
+  // Validasi file wajib ada
+  if (!file) {
+    throw new BadRequestException('File is required for vendor revision');
+  }
+
+  const action = req.body?.action;
+  
+  // Parse annotations jika ada
+  let annotations: any[] | undefined;
+  if (req.body?.annotations) {
+    try {
+      annotations = JSON.parse(req.body.annotations);
+    } catch (error) {
+      throw new BadRequestException('Invalid annotations JSON format');
+    }
+  }
+
+  // Untuk vendor, action harus 'submit_revision'
+  if (action !== 'submit_revision') {
+    throw new BadRequestException('Invalid action for vendor review');
+  }
+
+  const filePath = `uploads/${file.filename}`;
+  
+  // Call service method untuk resubmit
+  return this.documentService.resubmitSimple(req.user.id, +id);
+}
 
   @Get('vendor/pending-correction')
   @UseGuards(JwtAuthGuard)
@@ -307,7 +361,7 @@ export class DocumentController {
     return this.documentService.getVendorPendingCorrection(req.user);
   }
 
-  // === GET HISTORY (DOKUMEN SELESAI) ===
+  // === GET HISTORY (DOKUMEN SELESAI) ===s
   @Get('history')
   async getHistory(@Request() req) {
     return this.documentService.getHistory(req.user);
@@ -320,19 +374,19 @@ export class DocumentController {
   }
 
   @Patch(':id/save-annotations')
-  async saveAnnotations(
-    @Param('id') id: string,
-    @Body() body: { annotations: any[]; documentName: string },
-    @Req() req: any,
-  ) {
-    const userId = req.user.id;
-    return this.documentService.saveAnnotations(
-      userId,
-      parseInt(id),
-      body.annotations,
-      body.documentName,
-    );
-  }
+async saveAnnotations(
+  @Param('id') id: string,
+  @Body() body: { annotations: any[]; documentName: string },
+  @Req() req: any,
+) {
+  const userId = req.user.id;
+  return this.documentService.saveAnnotations(
+    userId,
+    parseInt(id),
+    body.annotations,
+    body.documentName,
+  );
+}
 
   // === GET DETAIL DOKUMEN (BESERTA SEMUA VERSI) ===
   @Get(':id')
