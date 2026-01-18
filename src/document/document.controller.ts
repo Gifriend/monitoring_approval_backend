@@ -24,7 +24,7 @@ import { ApprovalType, Division } from '@prisma/client';
 import { diskStorage } from 'multer';
 import { extname, resolve } from 'path';
 import type { Response } from 'express';
-import { createReadStream, existsSync, mkdirSync } from 'fs'; 
+import { createReadStream, existsSync, mkdirSync } from 'fs';
 
 // Helper untuk memastikan folder 'uploads' ada di root proyek
 const ensureUploadsDir = () => {
@@ -47,7 +47,6 @@ export class DocumentController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        //   PERBAIKAN: Simpan ke folder 'uploads' di root proyek
         destination: (req, file, callback) => {
           const uploadPath = ensureUploadsDir();
           callback(null, uploadPath);
@@ -68,6 +67,7 @@ export class DocumentController {
     body: {
       name: string;
       contractNumber?: string;
+      contractDate?: string; // <--- Tambahkan ini (terima sebagai string dari FormData)
       documentType: string;
     },
     @UploadedFile() file?: Express.Multer.File,
@@ -82,13 +82,15 @@ export class DocumentController {
       );
     }
 
-    // Path ini (relatif) sudah benar untuk disimpan di DB
-    // Service akan menggabungkannya dengan process.cwd()
     const filePath = `uploads/${file.filename}`;
+
     return this.documentService.submit(req.user.id, {
       name: body.name,
       filePath,
       contractNumber: body.contractNumber,
+      // Konversi string tanggal dari FormData ke object Date
+      // Jika kosong, gunakan null atau undefined
+      contractDate: body.contractDate ? new Date(body.contractDate) : undefined,
       documentType: body.documentType as ApprovalType,
     });
   }
@@ -115,13 +117,13 @@ export class DocumentController {
   async resubmit(
     @Request() req,
     @Param('id') id: number,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile() file: Express.Multer.File,
   ) {
-    // if (!file) {
-    //   throw new BadRequestException('File is required for resubmission');
-    // }
-    // const filePath = `uploads/${file.filename}`;
-    return this.documentService.resubmitSimple(req.user.id, +id);
+    if (!file) {
+      throw new BadRequestException('File is required for resubmission');
+    }
+    const filePath = `uploads/${file.filename}`;
+    return this.documentService.resubmitSimple(req.user.id, +id, filePath);
   }
 
   // === REVIEW HANDLERS ===
@@ -302,63 +304,196 @@ export class DocumentController {
   }
 
   // === VENDOR REVIEW (SUBMIT REVISION) ===
-@Patch(':id/vendor-review')
-@UseInterceptors(
-  FileInterceptor('file', {
-    storage: diskStorage({
-      destination: () => ensureUploadsDir(),
-      filename: (req, file, cb) => {
-        const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, `vendor-revision-${unique}${extname(file.originalname)}`);
-      },
+  @Patch(':id/vendor-review')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: () => ensureUploadsDir(),
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `vendor-revision-${unique}${extname(file.originalname)}`);
+        },
+      }),
     }),
-  }),
-)
-async vendorReview(
-  @Request() req,
-  @Param('id') id: number,
-  @UploadedFile() file?: Express.Multer.File,
-) {
-  console.log('📤 [Vendor] req.body =', req.body);
-  console.log('📄 [Vendor] file =', file?.originalname);
+  )
+  async vendorReview(
+    @Request() req,
+    @Param('id') id: number,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    console.log('📤 [Vendor] req.body =', req.body);
+    console.log('📄 [Vendor] file =', file?.originalname);
 
-  // Validasi user adalah vendor
-  if (req.user.division !== Division.Vendor) {
-    throw new ForbiddenException('Only vendors can submit revisions');
-  }
-
-  // Validasi file wajib ada
-  if (!file) {
-    throw new BadRequestException('File is required for vendor revision');
-  }
-
-  const action = req.body?.action;
-  
-  // Parse annotations jika ada
-  let annotations: any[] | undefined;
-  if (req.body?.annotations) {
-    try {
-      annotations = JSON.parse(req.body.annotations);
-    } catch (error) {
-      throw new BadRequestException('Invalid annotations JSON format');
+    // Validasi user adalah vendor
+    if (req.user.division !== Division.Vendor) {
+      throw new ForbiddenException('Only vendors can submit revisions');
     }
-  }
 
-  // Untuk vendor, action harus 'submit_revision'
-  if (action !== 'submit_revision') {
-    throw new BadRequestException('Invalid action for vendor review');
-  }
+    // Validasi file wajib ada
+    if (!file) {
+      throw new BadRequestException('File is required for vendor revision');
+    }
 
-  const filePath = `uploads/${file.filename}`;
-  
-  // Call service method untuk resubmit
-  return this.documentService.resubmitSimple(req.user.id, +id);
-}
+    const action = req.body?.action;
+
+    // Parse annotations jika ada
+    let annotations: any[] | undefined;
+    if (req.body?.annotations) {
+      try {
+        annotations = JSON.parse(req.body.annotations);
+      } catch (error) {
+        throw new BadRequestException('Invalid annotations JSON format');
+      }
+    }
+
+    // Untuk vendor, action harus 'submit_revision'
+    if (action !== 'submit_revision') {
+      throw new BadRequestException('Invalid action for vendor review');
+    }
+
+    const filePath = `uploads/${file.filename}`;
+
+    // Call service method untuk resubmit
+    return this.documentService.resubmitSimple(req.user.id, +id);
+  }
 
   @Get('vendor/pending-correction')
   @UseGuards(JwtAuthGuard)
   async getVendorPendingCorrection(@Request() req) {
     return this.documentService.getVendorPendingCorrection(req.user);
+  }
+
+  // ✅ TAMBAHKAN endpoint baru khusus untuk file upload
+  @Patch(':id/dalkon-review-upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (req, file, callback) => {
+          const uploadPath = ensureUploadsDir();
+          callback(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `dalkon-annotated-${unique}${extname(file.originalname)}`);
+        },
+      }),
+    }),
+  )
+  async dalkonReviewWithUpload(
+    @Request() req,
+    @Param('id') id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    console.log('📤 [Dalkon Review Upload] req.body =', req.body);
+    console.log('📤 [Dalkon Review Upload] file =', file?.originalname);
+
+    if (!file) {
+      throw new BadRequestException('File is required for this endpoint');
+    }
+
+    const action = req.body?.action;
+    const notes = req.body?.notes;
+
+    if (!action) {
+      throw new BadRequestException('Action is required');
+    }
+
+    return this.documentService.dalkonReview(
+      req.user,
+      +id,
+      action,
+      notes,
+      undefined, // No annotations from JSON
+      `uploads/${file.filename}`,
+    );
+  }
+
+  @Patch(':id/engineering-review-upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (req, file, callback) => {
+          const uploadPath = ensureUploadsDir();
+          callback(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `engineer-annotated-${unique}${extname(file.originalname)}`);
+        },
+      }),
+    }),
+  )
+  async engineeringReviewWithUpload(
+    @Request() req,
+    @Param('id') id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    console.log('📤 [Engineering Review Upload] req.body =', req.body);
+    console.log('📤 [Engineering Review Upload] file =', file?.originalname);
+
+    if (!file) {
+      throw new BadRequestException('File is required for this endpoint');
+    }
+
+    const action = req.body?.action;
+    const notes = req.body?.notes;
+
+    if (!action) {
+      throw new BadRequestException('Action is required');
+    }
+
+    return this.documentService.engineeringReview(
+      req.user,
+      +id,
+      action,
+      notes,
+      undefined,
+      `uploads/${file.filename}`,
+    );
+  }
+
+  @Patch(':id/manager-review-upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (req, file, callback) => {
+          const uploadPath = ensureUploadsDir();
+          callback(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `manager-annotated-${unique}${extname(file.originalname)}`);
+        },
+      }),
+    }),
+  )
+  async managerReviewWithUpload(
+    @Request() req,
+    @Param('id') id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    console.log('📤 [Manager Review Upload] req.body =', req.body);
+    console.log('📤 [Manager Review Upload] file =', file?.originalname);
+
+    if (!file) {
+      throw new BadRequestException('File is required for this endpoint');
+    }
+
+    const action = req.body?.action;
+    const notes = req.body?.notes;
+
+    if (!action) {
+      throw new BadRequestException('Action is required');
+    }
+
+    return this.documentService.managerReview(
+      req.user,
+      +id,
+      action,
+      notes,
+      undefined,
+      `uploads/${file.filename}`,
+    );
   }
 
   // === GET HISTORY (DOKUMEN SELESAI) ===s
@@ -374,19 +509,19 @@ async vendorReview(
   }
 
   @Patch(':id/save-annotations')
-async saveAnnotations(
-  @Param('id') id: string,
-  @Body() body: { annotations: any[]; documentName: string },
-  @Req() req: any,
-) {
-  const userId = req.user.id;
-  return this.documentService.saveAnnotations(
-    userId,
-    parseInt(id),
-    body.annotations,
-    body.documentName,
-  );
-}
+  async saveAnnotations(
+    @Param('id') id: string,
+    @Body() body: { annotations: any[]; documentName: string },
+    @Req() req: any,
+  ) {
+    const userId = req.user.id;
+    return this.documentService.saveAnnotations(
+      userId,
+      parseInt(id),
+      body.annotations,
+      body.documentName,
+    );
+  }
 
   // === GET DETAIL DOKUMEN (BESERTA SEMUA VERSI) ===
   @Get(':id')

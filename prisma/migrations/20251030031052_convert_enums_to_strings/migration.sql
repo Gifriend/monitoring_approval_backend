@@ -23,4 +23,4 @@ ADD COLUMN     "documentType" TEXT;
 CREATE INDEX "Approval_status_deadline_idx" ON "Approval"("status", "deadline");
 
 -- CreateIndex
-CREATE INDEX "Document_status_overallDeadline_idx" ON "Document"("status", "overallDeadline");
+CREATE INDEX "Document_status_contractDate_idx" ON "Document"("status", "contractDate");

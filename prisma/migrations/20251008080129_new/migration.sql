@@ -38,7 +38,7 @@ CREATE TABLE "Document" (
     "name" TEXT NOT NULL,
     "filePath" TEXT NOT NULL,
     "status" "Status" NOT NULL DEFAULT 'submitted',
-    "overallDeadline" TIMESTAMP(3),
+    "contractDate" TIMESTAMP(3),
     "documentType" "ApprovalType",
     "contractId" INTEGER,
     "submittedById" INTEGER NOT NULL,
@@ -77,7 +77,7 @@ CREATE INDEX "User_email_division_idx" ON "User"("email", "division");
 CREATE UNIQUE INDEX "Contract_contractNumber_key" ON "Contract"("contractNumber");
 
 -- CreateIndex
-CREATE INDEX "Document_status_overallDeadline_idx" ON "Document"("status", "overallDeadline");
+CREATE INDEX "Document_status_contractDate_idx" ON "Document"("status", "contractDate");
 
 -- CreateIndex
 CREATE INDEX "Document_submittedById_createdAt_idx" ON "Document"("submittedById", "createdAt");

@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { LoggingInterceptor } from './commmon/interceptors/logging.interceptors';
-import * as express from 'express';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,9 +11,9 @@ async function bootstrap() {
     credentials: true,
   };
 
-  // Increase payload size limit for annotations (50MB)
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  // Increase payload size limit for annotations (100MB)
+  app.use(json({ limit: '100mb' }));
+  app.use(urlencoded({ limit: '100mb', extended: true }));
 
   app.enableCors(cors);
   app.useGlobalInterceptors(new LoggingInterceptor());

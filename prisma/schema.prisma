@@ -69,7 +69,7 @@ model Document {
   name            String
   filePath        String
   status          Status    @default(submitted)
-  overallDeadline DateTime?
+  // overallDeadline DateTime?
 
   documentType String?
   contractId   String?

@@ -6,7 +6,7 @@
 
 */
 -- DropIndex
-DROP INDEX "public"."Document_status_overallDeadline_idx";
+DROP INDEX "public"."Document_status_contractDate_idx";
 
 -- DropIndex
 DROP INDEX "public"."Document_submittedById_createdAt_idx";

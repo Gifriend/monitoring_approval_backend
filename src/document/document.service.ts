@@ -112,7 +112,8 @@ export class DocumentService {
     data: {
       name: string;
       filePath: string;
-      contractNumber?: string;
+      contractNumber?: string; 
+      contractDate?: Date;
       documentType: ApprovalType;
     },
   ) {
@@ -131,14 +132,23 @@ export class DocumentService {
         where: { contractNumber: data.contractNumber },
       });
 
+      // Jika kontrak belum ada, buat baru
       if (!contract) {
         contract = await this.prisma.contract.create({
           data: {
             contractNumber: data.contractNumber,
-            contractDate: new Date(),
+            // Gunakan tanggal dari input user, jika tidak ada pakai tanggal sekarang
+            contractDate: data.contractDate || new Date(), 
           },
         });
-      }
+      } 
+      // OPSI TAMBAHAN: Jika ingin update tanggal kontrak jika kontrak sudah ada:
+      // else if (data.contractDate) {
+      //    await this.prisma.contract.update({
+      //       where: { id: contract.id },
+      //       data: { contractDate: data.contractDate }
+      //    });
+      // }
       contractId = contract.id;
     }
 
@@ -151,11 +161,11 @@ export class DocumentService {
         submittedById: userId,
         status: Status.submitted,
         progress: ['Submitted by vendor'],
-        latestVersion: 1,
+        latestVersion: 100,
         versions: {
           create: {
             filePath: data.filePath,
-            version: 1,
+            version: 100,
             uploadedById: userId,
           },
         },
@@ -218,7 +228,7 @@ export class DocumentService {
     action: string,
     notes?: string,
     annotations?: any[],
-    uploadedFilePath?: string,
+    uploadedFilePath?: string, // <--- File dari endpoint upload masuk sini
   ) {
     if (user.division !== Division.Dalkon)
       throw new ForbiddenException('Only Dalkon');
@@ -226,56 +236,49 @@ export class DocumentService {
     const doc = await this.prisma.document.findUnique({ where: { id: docId } });
     if (!doc) throw new NotFoundException();
 
-    let annotatedFilePath: string | undefined = uploadedFilePath;
-    if (!annotatedFilePath && annotations && annotations.length > 0) {
-      annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
+    // 1. Tentukan File Path Final
+    // Jika ada file upload, pakai itu. Jika tidak, cek anotasi.
+    let finalFilePath: string | undefined = uploadedFilePath;
+
+    if (!finalFilePath && annotations && annotations.length > 0) {
+      finalFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
     let newStatus: Status;
     let logMessage = '';
 
+    // 2. Logika Status (Sama seperti sebelumnya)
     if (action === 'approve') {
       if (doc.status === Status.submitted && !doc.returnRequestedBy) {
-        // Dokumen baru dari vendor → Forward ke Engineer
         newStatus = Status.inReviewEngineering;
         logMessage = notes || 'Dalkon forwarded to Engineering';
       } else if (
         doc.status === Status.submitted &&
         doc.returnRequestedBy === Division.Engineer
       ) {
-        // Dokumen dikembalikan dari Engineer
-        // Dalkon setuju dengan Engineer dan forward ke vendor
         newStatus = Status.returnForCorrection;
-        logMessage =
-          notes || 'Dalkon confirmed Engineer return - forwarding to Vendor';
+        logMessage = notes || 'Dalkon confirmed Engineer return';
       } else if (
         doc.status === Status.submitted &&
         doc.returnRequestedBy === Division.Manager
       ) {
-        // Dokumen dikembalikan dari Manager
         newStatus = Status.returnForCorrection;
-        logMessage =
-          notes || 'Dalkon confirmed Manager return - forwarding to Vendor';
+        logMessage = notes || 'Dalkon confirmed Manager return';
       } else if (doc.status === Status.approved) {
-        // Setelah Engineer approve → Forward ke Manager
         newStatus = Status.inReviewManager;
         logMessage = notes || 'Dalkon forwarded to Manager';
       } else if (doc.status === Status.inReviewConsultant) {
-        // Setelah Manager approve → Final approval
         newStatus = Status.approved;
-        logMessage = notes || 'Final approval by Dalkon - Document complete';
+        logMessage = notes || 'Final approval by Dalkon';
       } else if (doc.status === Status.approvedWithNotes) {
-        // Engineer approve with notes → Forward ke Manager
         newStatus = Status.inReviewManager;
-        logMessage =
-          notes || 'Dalkon forwarded to Manager (with notes from Engineer)';
+        logMessage = notes || 'Dalkon forwarded to Manager (with notes)';
       } else {
         throw new BadRequestException(
           `Invalid status for Dalkon approve: ${doc.status}`,
         );
       }
     } else if (action === 'returnForCorrection') {
-      // Dalkon bisa langsung return ke vendor kapan saja
       newStatus = Status.returnForCorrection;
       logMessage = notes || 'Returned by Dalkon for correction';
     } else if (action === 'reject') {
@@ -290,21 +293,31 @@ export class DocumentService {
       throw new BadRequestException('Invalid action');
     }
 
+    // 3. Siapkan Data Update
+    const updateData: any = {
+      status: newStatus,
+      reviewedById: user.id,
+      returnRequestedBy:
+        action === 'returnForCorrection' ? Division.Dalkon : null,
+      progress: { push: logMessage },
+    };
+
+    // 🔥 PENTING: Jika ada file baru (dari upload/anotasi), update kolom filePath utama
+    if (finalFilePath) {
+      updateData.filePath = finalFilePath;
+    }
+
+    // 4. Eksekusi Update ke Database
     const updated = await this.prisma.document.update({
       where: { id: docId },
-      data: {
-        status: newStatus,
-        reviewedById: user.id,
-        returnRequestedBy:
-          action === 'returnForCorrection' ? Division.Dalkon : null,
-        progress: { push: logMessage },
-      },
+      data: updateData,
     });
 
-    if (annotatedFilePath) {
+    // 5. Simpan History Version (Agar file revisi tercatat di history)
+    if (finalFilePath) {
       await this.saveReviewerAnnotation(
         docId,
-        annotatedFilePath,
+        finalFilePath,
         user.id,
         Division.Dalkon,
       );
@@ -320,7 +333,7 @@ export class DocumentService {
     action: string,
     notes?: string,
     annotations?: any[],
-    uploadedFilePath?: string,
+    uploadedFilePath?: string, // <--- File dari endpoint upload masuk sini
   ) {
     if (user.division !== Division.Engineer)
       throw new ForbiddenException('Only Engineer');
@@ -328,59 +341,68 @@ export class DocumentService {
     const doc = await this.prisma.document.findUnique({ where: { id: docId } });
     if (!doc) throw new NotFoundException();
 
-    // ✅ PERBAIKAN: Engineer bisa review dokumen dengan status submitted atau inReviewEngineering
-    // Status submitted bisa muncul jika Dalkon belum forward, atau jika dikembalikan dari Manager
     if (
       doc.status !== Status.inReviewEngineering &&
       doc.status !== Status.submitted
     ) {
       throw new BadRequestException(
-        `Document cannot be reviewed by Engineer at status: ${doc.status}. Expected: inReviewEngineering or submitted`,
+        `Document cannot be reviewed by Engineer at status: ${doc.status}`,
       );
     }
 
-    let annotatedFilePath: string | undefined = uploadedFilePath;
-    if (!annotatedFilePath && annotations && annotations.length > 0) {
-      annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
+    // 1. Tentukan File Path Final
+    let finalFilePath: string | undefined = uploadedFilePath;
+
+    if (!finalFilePath && annotations && annotations.length > 0) {
+      finalFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
     let newStatus: Status;
     let logMessage = '';
 
+    // 2. Logika Status
     switch (action) {
       case 'approve':
         newStatus = Status.approved;
-        logMessage = notes || 'Approved by Engineer - returning to Dalkon';
+        logMessage = notes || 'Approved by Engineer';
         break;
       case 'approveWithNotes':
         newStatus = Status.approvedWithNotes;
-        logMessage =
-          notes || 'Approved with notes by Engineer - returning to Dalkon';
+        logMessage = notes || 'Approved with notes by Engineer';
         break;
       case 'returnForCorrection':
-        //   PERBAIKAN: Kembali ke Dalkon dulu (status submitted)
         newStatus = Status.submitted;
-        logMessage = notes || 'Returned by Engineer - pending Dalkon review';
+        logMessage = notes || 'Returned by Engineer';
         break;
       default:
         throw new BadRequestException('Invalid action');
     }
 
+    // 3. Siapkan Data Update
+    const updateData: any = {
+      status: newStatus,
+      reviewedById: user.id,
+      returnRequestedBy:
+        action === 'returnForCorrection' ? Division.Engineer : undefined,
+      progress: { push: logMessage },
+    };
+
+    // 🔥 PENTING: Update filePath utama jika ada file baru
+    if (finalFilePath) {
+      updateData.filePath = finalFilePath;
+    }
+
+    // 4. Update Database
     const updated = await this.prisma.document.update({
       where: { id: docId },
-      data: {
-        status: newStatus,
-        reviewedById: user.id,
-        returnRequestedBy:
-          action === 'returnForCorrection' ? Division.Engineer : undefined,
-        progress: { push: logMessage },
-      },
+      data: updateData,
     });
 
-    if (annotatedFilePath) {
+    // 5. Simpan History
+    if (finalFilePath) {
       await this.saveReviewerAnnotation(
         docId,
-        annotatedFilePath,
+        finalFilePath,
         user.id,
         Division.Engineer,
       );
@@ -389,14 +411,14 @@ export class DocumentService {
     return updated;
   }
 
-  // MANAGER REVIEW
+  // === MANAGER REVIEW ===
   async managerReview(
     user: any,
     docId: number,
     action: string,
     notes?: string,
     annotations?: any[],
-    uploadedFilePath?: string,
+    uploadedFilePath?: string, // <--- File dari endpoint upload masuk sini
   ) {
     if (user.division !== Division.Manager)
       throw new ForbiddenException('Only Manager');
@@ -406,41 +428,52 @@ export class DocumentService {
     if (!doc || doc.status !== Status.inReviewManager)
       throw new BadRequestException('Document not in manager review stage');
 
-    let annotatedFilePath: string | undefined = uploadedFilePath;
-    if (!annotatedFilePath && annotations && annotations.length > 0) {
-      annotatedFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
+    // 1. Tentukan File Path Final
+    let finalFilePath: string | undefined = uploadedFilePath;
+
+    if (!finalFilePath && annotations && annotations.length > 0) {
+      finalFilePath = await this.mergeAnnotationsToPdf(docId, annotations);
     }
 
     let newStatus: Status;
     let logMessage = '';
 
+    // 2. Logika Status
     if (action === 'approve') {
       newStatus = Status.inReviewConsultant;
-      logMessage =
-        notes || 'Approved by Manager - returning to Dalkon for final approval';
+      logMessage = notes || 'Approved by Manager';
     } else if (action === 'returnForCorrection') {
-      //   PERBAIKAN: Kembali ke Dalkon dulu (status submitted)
       newStatus = Status.submitted;
-      logMessage = notes || 'Returned by Manager - pending Dalkon review';
+      logMessage = notes || 'Returned by Manager';
     } else {
       throw new BadRequestException('Invalid action');
     }
 
+    // 3. Siapkan Data Update
+    const updateData: any = {
+      status: newStatus,
+      reviewedById: user.id,
+      returnRequestedBy:
+        action === 'returnForCorrection' ? Division.Manager : undefined,
+      progress: { push: logMessage },
+    };
+
+    // 🔥 PENTING: Update filePath utama
+    if (finalFilePath) {
+      updateData.filePath = finalFilePath;
+    }
+
+    // 4. Update Database
     const updated = await this.prisma.document.update({
       where: { id: docId },
-      data: {
-        status: newStatus,
-        reviewedById: user.id,
-        returnRequestedBy:
-          action === 'returnForCorrection' ? Division.Manager : undefined,
-        progress: { push: logMessage },
-      },
+      data: updateData,
     });
 
-    if (annotatedFilePath) {
+    // 5. Simpan History
+    if (finalFilePath) {
       await this.saveReviewerAnnotation(
         docId,
-        annotatedFilePath,
+        finalFilePath,
         user.id,
         Division.Manager,
       );
@@ -450,7 +483,7 @@ export class DocumentService {
   }
 
   // === RESUBMIT VENDOR ===
-  async resubmitSimple(userId: number, docId: number) {
+  async resubmitSimple(userId: number, docId: number, filePath?: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -487,8 +520,8 @@ export class DocumentService {
       where: { id: docId },
       data: {
         status: Status.submitted,
-        reviewedById: null,
-        returnRequestedBy: null,
+        filePath: filePath || doc.filePath, // Use new file if provided
+        latestVersion: doc.latestVersion + 1,
         progress: {
           push: `Vendor: Resubmitted with annotations (v${doc.latestVersion})`,
         },
@@ -520,7 +553,7 @@ export class DocumentService {
         include: {
           submittedBy: { select: { id: true, name: true } },
           reviewedBy: { select: { id: true, name: true, division: true } },
-          contract: { select: { contractNumber: true } },
+          contract: { select: { contractNumber: true, contractDate: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
         },
@@ -568,7 +601,7 @@ export class DocumentService {
         include: {
           submittedBy: { select: { id: true, name: true } },
           reviewedBy: { select: { id: true, name: true, division: true } },
-          contract: { select: { contractNumber: true } },
+          contract: { select: { contractNumber: true, contractDate: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
         },
@@ -585,7 +618,7 @@ export class DocumentService {
         include: {
           submittedBy: { select: { id: true, name: true } },
           reviewedBy: { select: { id: true, name: true, division: true } },
-          contract: { select: { contractNumber: true } },
+          contract: { select: { contractNumber: true, contractDate: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
         },
@@ -602,7 +635,7 @@ export class DocumentService {
         include: {
           submittedBy: { select: { id: true, name: true } },
           reviewedBy: { select: { id: true, name: true, division: true } },
-          contract: { select: { contractNumber: true } },
+          contract: { select: { contractNumber: true, contractDate: true } },
           approvals: { take: 1, orderBy: { createdAt: 'desc' } },
           versions: { orderBy: { version: 'desc' }, take: 1 },
         },
@@ -625,7 +658,7 @@ export class DocumentService {
       },
       include: {
         submittedBy: { select: { id: true, name: true } },
-        contract: { select: { contractNumber: true } },
+        contract: { select: { contractNumber: true, contractDate: true } },
         approvals: {
           orderBy: { createdAt: 'desc' },
           take: 1,
@@ -677,7 +710,7 @@ export class DocumentService {
         versions: {
           create: {
             filePath: filePath,
-            version: newVersion + 0.1, // 1.1, 2.1, dst untuk preview
+            version: newVersion + 1, // 1.1, 2.1, dst untuk preview
             uploadedById: userId,
           },
         },
@@ -901,7 +934,7 @@ export class DocumentService {
             },
           },
           contract: {
-            select: { contractNumber: true },
+            select: { contractNumber: true, contractDate: true },
           },
           versions: { orderBy: { version: 'desc' }, take: 1 },
         },
@@ -935,7 +968,7 @@ export class DocumentService {
             select: { id: true, name: true, email: true },
           },
           contract: {
-            select: { contractNumber: true },
+            select: { contractNumber: true, contractDate: true },
           },
           versions: { orderBy: { version: 'desc' }, take: 1 },
         },
@@ -959,7 +992,7 @@ export class DocumentService {
           include: { uploadedBy: { select: { id: true, name: true } } },
         },
         submittedBy: { select: { id: true, name: true, email: true } },
-        contract: { select: { contractNumber: true } },
+        contract: { select: { contractNumber: true, contractDate: true } },
       },
     });
 
@@ -1030,17 +1063,20 @@ export class DocumentService {
       throw new NotFoundException('Document does not have a file path');
     }
 
-    // 2. Buat path absolut
-    // Ini menggabungkan /home/user/proyek-nestjs + uploads/file.pdf
     let filePath: string;
-    if (path.isAbsolute(doc.filePath)) {
-      // Path sudah absolute (e.g., D:\...\uploads\file.pdf)
-      filePath = doc.filePath;
+
+    let normalizedPath = doc.filePath;
+
+    if (normalizedPath.startsWith('/') || normalizedPath.startsWith('\\')) {
+      normalizedPath = normalizedPath.slice(1);
+    }
+
+    // Check if it's a Windows absolute path (has drive letter like D:\)
+    if (path.isAbsolute(normalizedPath) && /^[a-zA-Z]:/.test(normalizedPath)) {
+      // Already absolute Windows path
+      filePath = normalizedPath;
     } else {
-      // Path relative (e.g., uploads/file.pdf)
-      const normalizedPath = doc.filePath.startsWith('/')
-        ? doc.filePath.slice(1)
-        : doc.filePath;
+      // Relative path - resolve from project root
       filePath = path.resolve(process.cwd(), normalizedPath);
     }
 
