@@ -9,12 +9,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ApprovalType, Division, Status } from '@prisma/client';
 import { PDFDocument, rgb } from 'pdf-lib';
+import { createCanvas, loadImage } from 'canvas';
 
 @Injectable()
 export class DocumentService {
   constructor(private prisma: PrismaService) {}
 
-  // Helper method to merge annotations to PDF
+  // Ganti method mergeAnnotationsToPdf
   private async mergeAnnotationsToPdf(
     documentId: number,
     annotations: any[],
@@ -46,13 +47,19 @@ export class DocumentService {
       const page = pages[ann.page - 1];
       if (!page) continue;
 
-      const { width, height } = page.getSize();
+      const { width: pdfWidth, height: pdfHeight } = page.getSize();
 
       if (ann.type === 'draw' && ann.path) {
         const { createCanvas } = require('canvas');
-        const canvas = createCanvas(width, height);
+
+        // ✅ PERBAIKAN: Gunakan ukuran canvas yang sama dengan frontend
+        const CANVAS_WIDTH = 900; // Sama dengan Page width={900} di frontend
+        const CANVAS_HEIGHT = (pdfHeight / pdfWidth) * CANVAS_WIDTH;
+
+        const canvas = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
         const ctx = canvas.getContext('2d');
 
+        // ✅ Gambar dengan koordinat asli dari frontend (sudah dalam skala canvas)
         ctx.lineWidth = ann.thickness || 4;
         ctx.strokeStyle = ann.color || '#ff0000';
         ctx.lineCap = 'round';
@@ -65,17 +72,31 @@ export class DocumentService {
         });
         ctx.stroke();
 
+        // ✅ Embed dengan ukuran PDF (scaling otomatis oleh pdf-lib)
         const pngImage = await pdfDoc.embedPng(canvas.toDataURL());
-        page.drawImage(pngImage, { x: 0, y: 0, width, height });
+        page.drawImage(pngImage, {
+          x: 0,
+          y: 0,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
       } else if (ann.type === 'text' && ann.text && ann.position) {
+        // ✅ PERBAIKAN: Scale koordinat text dari canvas ke PDF
+        const scaleX = pdfWidth / 900;
+        const scaleY = pdfHeight / ((pdfHeight / pdfWidth) * 900);
+
         const rgbColor = this.hexToRgb(ann.color || '#000000');
         page.drawText(ann.text, {
-          x: ann.position.x,
-          y: height - ann.position.y,
-          size: ann.fontSize || 20,
+          x: ann.position.x * scaleX,
+          y: pdfHeight - ann.position.y * scaleY,
+          size: (ann.fontSize || 20) * scaleX,
           color: rgb(rgbColor.r, rgbColor.g, rgbColor.b),
         });
       } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
+        // ✅ PERBAIKAN: Scale koordinat stamp dari canvas ke PDF
+        const scaleX = pdfWidth / 900;
+        const scaleY = pdfHeight / ((pdfHeight / pdfWidth) * 900);
+
         const base64Data = ann.stampImage.split(',')[1];
         const imageBuffer = Buffer.from(base64Data, 'base64');
 
@@ -87,10 +108,10 @@ export class DocumentService {
         }
 
         page.drawImage(stampImg, {
-          x: ann.position.x,
-          y: height - ann.position.y - (ann.height || 100),
-          width: ann.width || 100,
-          height: ann.height || 100,
+          x: ann.position.x * scaleX,
+          y: pdfHeight - (ann.position.y + (ann.height || 100)) * scaleY,
+          width: (ann.width || 100) * scaleX,
+          height: (ann.height || 100) * scaleY,
         });
       }
     }
@@ -112,7 +133,7 @@ export class DocumentService {
     data: {
       name: string;
       filePath: string;
-      contractNumber?: string; 
+      contractNumber?: string;
       contractDate?: Date;
       documentType: ApprovalType;
     },
@@ -138,10 +159,10 @@ export class DocumentService {
           data: {
             contractNumber: data.contractNumber,
             // Gunakan tanggal dari input user, jika tidak ada pakai tanggal sekarang
-            contractDate: data.contractDate || new Date(), 
+            contractDate: data.contractDate || new Date(),
           },
         });
-      } 
+      }
       // OPSI TAMBAHAN: Jika ingin update tanggal kontrak jika kontrak sudah ada:
       // else if (data.contractDate) {
       //    await this.prisma.contract.update({
@@ -723,172 +744,137 @@ export class DocumentService {
   }
 
   async saveAnnotations(
-    userId: number,
-    docId: number,
-    annotations: any[],
-    documentName: string,
-  ) {
-    // 1. Find user
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+  userId: number,
+  docId: number,
+  annotations: any[],
+  documentName: string,
+): Promise<void> {
+  const document = await this.prisma.document.findUnique({
+    where: { id: docId },
+  });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+  if (!document) {
+    throw new NotFoundException('Document not found');
+  }
 
-    // 2. Find document
-    const document = await this.prisma.document.findUnique({
-      where: { id: docId },
-    });
+  // Resolve absolute path
+  const filePath = path.isAbsolute(document.filePath)
+    ? document.filePath
+    : path.join(process.cwd(), document.filePath);
 
-    if (!document) {
-      throw new NotFoundException('Document not found');
-    }
+  if (!fs.existsSync(filePath)) {
+    throw new NotFoundException(`File not found at path: ${filePath}`);
+  }
 
-    // 3. ✅ VALIDASI OTORISASI
-    const isReviewer =
-      user.division === Division.Dalkon ||
-      user.division === Division.Engineer ||
-      user.division === Division.Manager;
-    const isOwner =
-      user.division === Division.Vendor && document.submittedById === userId;
+  console.log('💾 Saving annotations to PDF:', {
+    docId,
+    filePath,
+    annotationsCount: annotations.length,
+  });
 
-    if (!isReviewer && !isOwner) {
-      throw new ForbiddenException(
-        'You are not authorized to edit this document',
-      );
-    }
-
-    // 4. ✅ VALIDASI STATUS UNTUK VENDOR
-    if (
-      user.division === Division.Vendor &&
-      document.status !== Status.returnForCorrection
-    ) {
-      throw new BadRequestException(
-        'Vendor can only save annotations on documents with status "returnForCorrection"',
-      );
-    }
-
-    // 5. Read existing PDF file
-    // Handle both absolute and relative paths
-    let filePath: string;
-    if (path.isAbsolute(document.filePath)) {
-      // Path sudah absolute (e.g., D:\...\uploads\file.pdf)
-      filePath = document.filePath;
-    } else {
-      // Path relative (e.g., uploads/file.pdf)
-      const normalizedPath = document.filePath.startsWith('/')
-        ? document.filePath.slice(1)
-        : document.filePath;
-      filePath = path.resolve(process.cwd(), normalizedPath);
-    }
-
-    console.log('🔍 [saveAnnotations] Looking for file at:', filePath);
-
-    if (!fs.existsSync(filePath)) {
-      console.error('❌ File not found:', filePath);
-      console.error('   document.filePath from DB:', document.filePath);
-      console.error('   process.cwd():', process.cwd());
-      throw new NotFoundException('File not found on server');
-    }
-
+  try {
+    // Load PDF
     const existingPdfBytes = fs.readFileSync(filePath);
-
-    // 6. Load PDF with pdf-lib
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const pages = pdfDoc.getPages();
 
-    // 7. Process annotations
+    // ✅ Frontend canvas width is ALWAYS 900px (we fixed it above)
+    const CANVAS_WIDTH = 900;
+
+    // Group annotations by page to draw all on one canvas per page
+    const annotationsByPage = new Map<number, any[]>();
     for (const ann of annotations) {
-      const page = pages[ann.page - 1];
-      if (!page) continue;
-
-      const { width, height } = page.getSize();
-
-      if (ann.type === 'draw' && ann.path) {
-        const { createCanvas } = require('canvas');
-        const canvas = createCanvas(width, height);
-        const ctx = canvas.getContext('2d');
-
-        ctx.lineWidth = ann.thickness || 4;
-        ctx.strokeStyle = ann.color || '#ff0000';
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-
-        ann.path.forEach((p: any, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
-        });
-        ctx.stroke();
-
-        const pngImage = await pdfDoc.embedPng(canvas.toDataURL());
-        page.drawImage(pngImage, { x: 0, y: 0, width, height });
-      } else if (ann.type === 'text' && ann.text && ann.position) {
-        const rgbColor = this.hexToRgb(ann.color || '#000000');
-        page.drawText(ann.text, {
-          x: ann.position.x,
-          y: height - ann.position.y,
-          size: ann.fontSize || 20,
-          color: rgb(rgbColor.r, rgbColor.g, rgbColor.b),
-        });
-      } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
-        const base64Data = ann.stampImage.split(',')[1];
-        const imageBuffer = Buffer.from(base64Data, 'base64');
-
-        let stampImg;
-        if (ann.stampImage.includes('image/png')) {
-          stampImg = await pdfDoc.embedPng(imageBuffer);
-        } else {
-          stampImg = await pdfDoc.embedJpg(imageBuffer);
-        }
-
-        page.drawImage(stampImg, {
-          x: ann.position.x,
-          y: height - ann.position.y - (ann.height || 100),
-          width: ann.width || 100,
-          height: ann.height || 100,
-        });
+      const pageNum = ann.page;
+      if (!annotationsByPage.has(pageNum)) {
+        annotationsByPage.set(pageNum, []);
       }
+      annotationsByPage.get(pageNum)!.push(ann);
     }
 
-    // 8. Save modified PDF
+    for (const [pageNum, pageAnnotations] of annotationsByPage) {
+      const pageIndex = pageNum - 1;
+      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+
+      const page = pages[pageIndex];
+      const { width: pdfWidth, height: pdfHeight } = page.getSize();
+
+      // ✅ Canvas height proportional ke PDF aspect ratio
+      const CANVAS_HEIGHT = Math.round((pdfHeight / pdfWidth) * CANVAS_WIDTH);
+
+      // ✅ Create canvas dengan ukuran sama persis dengan frontend
+      const canvas = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+      const ctx = canvas.getContext('2d');
+
+      // Draw all annotations for this page
+      for (const ann of pageAnnotations) {
+        if (ann.type === 'draw' && ann.path && Array.isArray(ann.path)) {
+          ctx.lineWidth = ann.thickness || 4;
+          ctx.strokeStyle = ann.color || '#ff0000';
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.beginPath();
+
+          ann.path.forEach((point: any, index: number) => {
+            if (index === 0) {
+              ctx.moveTo(point.x, point.y);
+            } else {
+              ctx.lineTo(point.x, point.y);
+            }
+          });
+
+          ctx.stroke();
+        } else if (ann.type === 'text' && ann.text && ann.position) {
+          const fontSize = ann.fontSize || 20;
+          ctx.font = `${fontSize}px Arial`;
+          ctx.fillStyle = ann.color || '#000000';
+          ctx.fillText(ann.text, ann.position.x, ann.position.y);
+        } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
+          try {
+            const base64Data = ann.stampImage.replace(
+              /^data:image\/\w+;base64,/,
+              '',
+            );
+            const imageBuffer = Buffer.from(base64Data, 'base64');
+            const img = await loadImage(imageBuffer);
+
+            const stampWidth = ann.width || 100;
+            const stampHeight = ann.height || 100;
+
+            ctx.drawImage(
+              img,
+              ann.position.x,
+              ann.position.y,
+              stampWidth,
+              stampHeight,
+            );
+          } catch (imgErr) {
+            console.error('Error loading stamp image:', imgErr);
+          }
+        }
+      }
+
+      // ✅ Embed canvas to PDF - pdf-lib will scale it to fit pdfWidth x pdfHeight
+      const pngBuffer = canvas.toBuffer('image/png');
+      const pngImage = await pdfDoc.embedPng(pngBuffer);
+
+      page.drawImage(pngImage, {
+        x: 0,
+        y: 0,
+        width: pdfWidth,
+        height: pdfHeight,
+      });
+    }
+
+    // Save PDF
     const pdfBytes = await pdfDoc.save();
-    const newFilename = `annotated-${Date.now()}-${path.basename(
-      document.filePath,
-    )}`;
-    const newFilePath = path.join(process.cwd(), 'uploads', newFilename);
+    fs.writeFileSync(filePath, pdfBytes);
 
-    fs.writeFileSync(newFilePath, pdfBytes);
-
-    // 9. ✅ PERBAIKAN: Update dengan RELATIVE PATH
-    const relativeFilePath = `uploads/${newFilename}`;
-
-    await this.prisma.document.update({
-      where: { id: docId },
-      data: {
-        filePath: relativeFilePath, // ✅ Simpan relative path (FIXED!)
-        updatedAt: new Date(),
-        progress: {
-          push: `Annotations saved by ${user.division}`,
-        },
-      },
-    });
-
-    console.log('✅ Annotations saved successfully:', {
-      docId,
-      userId,
-      division: user.division,
-      relativePath: relativeFilePath,
-      absolutePath: newFilePath,
-    });
-
-    return {
-      message: 'Annotations saved successfully',
-      filePath: relativeFilePath,
-    };
+    console.log('✅ Annotations saved successfully');
+  } catch (error) {
+    console.error('❌ Error saving annotations:', error);
+    throw new Error(`Failed to save annotations: ${error.message}`);
   }
+}
 
   // Helper function to convert hex color to RGB
   private hexToRgb(hex: string) {
