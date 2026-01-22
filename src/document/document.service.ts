@@ -744,137 +744,137 @@ export class DocumentService {
   }
 
   async saveAnnotations(
-  userId: number,
-  docId: number,
-  annotations: any[],
-  documentName: string,
-): Promise<void> {
-  const document = await this.prisma.document.findUnique({
-    where: { id: docId },
-  });
+    userId: number,
+    docId: number,
+    annotations: any[],
+    documentName: string,
+  ): Promise<void> {
+    const document = await this.prisma.document.findUnique({
+      where: { id: docId },
+    });
 
-  if (!document) {
-    throw new NotFoundException('Document not found');
-  }
-
-  // Resolve absolute path
-  const filePath = path.isAbsolute(document.filePath)
-    ? document.filePath
-    : path.join(process.cwd(), document.filePath);
-
-  if (!fs.existsSync(filePath)) {
-    throw new NotFoundException(`File not found at path: ${filePath}`);
-  }
-
-  console.log('💾 Saving annotations to PDF:', {
-    docId,
-    filePath,
-    annotationsCount: annotations.length,
-  });
-
-  try {
-    // Load PDF
-    const existingPdfBytes = fs.readFileSync(filePath);
-    const pdfDoc = await PDFDocument.load(existingPdfBytes);
-    const pages = pdfDoc.getPages();
-
-    // ✅ Frontend canvas width is ALWAYS 900px (we fixed it above)
-    const CANVAS_WIDTH = 900;
-
-    // Group annotations by page to draw all on one canvas per page
-    const annotationsByPage = new Map<number, any[]>();
-    for (const ann of annotations) {
-      const pageNum = ann.page;
-      if (!annotationsByPage.has(pageNum)) {
-        annotationsByPage.set(pageNum, []);
-      }
-      annotationsByPage.get(pageNum)!.push(ann);
+    if (!document) {
+      throw new NotFoundException('Document not found');
     }
 
-    for (const [pageNum, pageAnnotations] of annotationsByPage) {
-      const pageIndex = pageNum - 1;
-      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+    // Resolve absolute path
+    const filePath = path.isAbsolute(document.filePath)
+      ? document.filePath
+      : path.join(process.cwd(), document.filePath);
 
-      const page = pages[pageIndex];
-      const { width: pdfWidth, height: pdfHeight } = page.getSize();
+    if (!fs.existsSync(filePath)) {
+      throw new NotFoundException(`File not found at path: ${filePath}`);
+    }
 
-      // ✅ Canvas height proportional ke PDF aspect ratio
-      const CANVAS_HEIGHT = Math.round((pdfHeight / pdfWidth) * CANVAS_WIDTH);
+    console.log('💾 Saving annotations to PDF:', {
+      docId,
+      filePath,
+      annotationsCount: annotations.length,
+    });
 
-      // ✅ Create canvas dengan ukuran sama persis dengan frontend
-      const canvas = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
-      const ctx = canvas.getContext('2d');
+    try {
+      // Load PDF
+      const existingPdfBytes = fs.readFileSync(filePath);
+      const pdfDoc = await PDFDocument.load(existingPdfBytes);
+      const pages = pdfDoc.getPages();
 
-      // Draw all annotations for this page
-      for (const ann of pageAnnotations) {
-        if (ann.type === 'draw' && ann.path && Array.isArray(ann.path)) {
-          ctx.lineWidth = ann.thickness || 4;
-          ctx.strokeStyle = ann.color || '#ff0000';
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.beginPath();
+      // ✅ Frontend canvas width is ALWAYS 900px (we fixed it above)
+      const CANVAS_WIDTH = 900;
 
-          ann.path.forEach((point: any, index: number) => {
-            if (index === 0) {
-              ctx.moveTo(point.x, point.y);
-            } else {
-              ctx.lineTo(point.x, point.y);
+      // Group annotations by page to draw all on one canvas per page
+      const annotationsByPage = new Map<number, any[]>();
+      for (const ann of annotations) {
+        const pageNum = ann.page;
+        if (!annotationsByPage.has(pageNum)) {
+          annotationsByPage.set(pageNum, []);
+        }
+        annotationsByPage.get(pageNum)!.push(ann);
+      }
+
+      for (const [pageNum, pageAnnotations] of annotationsByPage) {
+        const pageIndex = pageNum - 1;
+        if (pageIndex < 0 || pageIndex >= pages.length) continue;
+
+        const page = pages[pageIndex];
+        const { width: pdfWidth, height: pdfHeight } = page.getSize();
+
+        // ✅ Canvas height proportional ke PDF aspect ratio
+        const CANVAS_HEIGHT = Math.round((pdfHeight / pdfWidth) * CANVAS_WIDTH);
+
+        // ✅ Create canvas dengan ukuran sama persis dengan frontend
+        const canvas = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+        const ctx = canvas.getContext('2d');
+
+        // Draw all annotations for this page
+        for (const ann of pageAnnotations) {
+          if (ann.type === 'draw' && ann.path && Array.isArray(ann.path)) {
+            ctx.lineWidth = ann.thickness || 4;
+            ctx.strokeStyle = ann.color || '#ff0000';
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+
+            ann.path.forEach((point: any, index: number) => {
+              if (index === 0) {
+                ctx.moveTo(point.x, point.y);
+              } else {
+                ctx.lineTo(point.x, point.y);
+              }
+            });
+
+            ctx.stroke();
+          } else if (ann.type === 'text' && ann.text && ann.position) {
+            const fontSize = ann.fontSize || 20;
+            ctx.font = `${fontSize}px Arial`;
+            ctx.fillStyle = ann.color || '#000000';
+            ctx.fillText(ann.text, ann.position.x, ann.position.y);
+          } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
+            try {
+              const base64Data = ann.stampImage.replace(
+                /^data:image\/\w+;base64,/,
+                '',
+              );
+              const imageBuffer = Buffer.from(base64Data, 'base64');
+              const img = await loadImage(imageBuffer);
+
+              const stampWidth = ann.width || 100;
+              const stampHeight = ann.height || 100;
+
+              ctx.drawImage(
+                img,
+                ann.position.x,
+                ann.position.y,
+                stampWidth,
+                stampHeight,
+              );
+            } catch (imgErr) {
+              console.error('Error loading stamp image:', imgErr);
             }
-          });
-
-          ctx.stroke();
-        } else if (ann.type === 'text' && ann.text && ann.position) {
-          const fontSize = ann.fontSize || 20;
-          ctx.font = `${fontSize}px Arial`;
-          ctx.fillStyle = ann.color || '#000000';
-          ctx.fillText(ann.text, ann.position.x, ann.position.y);
-        } else if (ann.type === 'stamp' && ann.stampImage && ann.position) {
-          try {
-            const base64Data = ann.stampImage.replace(
-              /^data:image\/\w+;base64,/,
-              '',
-            );
-            const imageBuffer = Buffer.from(base64Data, 'base64');
-            const img = await loadImage(imageBuffer);
-
-            const stampWidth = ann.width || 100;
-            const stampHeight = ann.height || 100;
-
-            ctx.drawImage(
-              img,
-              ann.position.x,
-              ann.position.y,
-              stampWidth,
-              stampHeight,
-            );
-          } catch (imgErr) {
-            console.error('Error loading stamp image:', imgErr);
           }
         }
+
+        // ✅ Embed canvas to PDF - pdf-lib will scale it to fit pdfWidth x pdfHeight
+        const pngBuffer = canvas.toBuffer('image/png');
+        const pngImage = await pdfDoc.embedPng(pngBuffer);
+
+        page.drawImage(pngImage, {
+          x: 0,
+          y: 0,
+          width: pdfWidth,
+          height: pdfHeight,
+        });
       }
 
-      // ✅ Embed canvas to PDF - pdf-lib will scale it to fit pdfWidth x pdfHeight
-      const pngBuffer = canvas.toBuffer('image/png');
-      const pngImage = await pdfDoc.embedPng(pngBuffer);
+      // Save PDF
+      const pdfBytes = await pdfDoc.save();
+      fs.writeFileSync(filePath, pdfBytes);
 
-      page.drawImage(pngImage, {
-        x: 0,
-        y: 0,
-        width: pdfWidth,
-        height: pdfHeight,
-      });
+      console.log('✅ Annotations saved successfully');
+    } catch (error) {
+      console.error('❌ Error saving annotations:', error);
+      throw new Error(`Failed to save annotations: ${error.message}`);
     }
-
-    // Save PDF
-    const pdfBytes = await pdfDoc.save();
-    fs.writeFileSync(filePath, pdfBytes);
-
-    console.log('✅ Annotations saved successfully');
-  } catch (error) {
-    console.error('❌ Error saving annotations:', error);
-    throw new Error(`Failed to save annotations: ${error.message}`);
   }
-}
 
   // Helper function to convert hex color to RGB
   private hexToRgb(hex: string) {
@@ -903,10 +903,11 @@ export class DocumentService {
       Status.rejected,
     ];
 
+    // 🔒 VENDOR - Hanya lihat dokumen yang MEREKA submit
     if (userDivision === Division.Vendor) {
       return this.prisma.document.findMany({
         where: {
-          submittedById: user.id,
+          submittedById: userId, // ✅ Harus user yang sama
           status: { in: finishedStatuses },
         },
         include: {
@@ -915,19 +916,20 @@ export class DocumentService {
             orderBy: { createdAt: 'desc' },
             include: {
               approvedBy: {
-                select: { id: true, name: true },
+                select: { id: true, name: true, division: true },
               },
             },
           },
           contract: {
             select: { contractNumber: true, contractDate: true },
           },
-          versions: { orderBy: { version: 'desc' }, take: 1 },
+          versions: { orderBy: { version: 'desc' } }, // ✅ Include semua versi
         },
         orderBy: { createdAt: 'desc' },
       });
     }
 
+    // 👥 DALKON, ENGINEER, MANAGER - Lihat SEMUA history dokumen
     if (
       [Division.Dalkon, Division.Engineer, Division.Manager].includes(
         userDivision,
@@ -936,31 +938,28 @@ export class DocumentService {
       return this.prisma.document.findMany({
         where: {
           status: { in: finishedStatuses },
-          OR: [
-            { reviewedById: user.id },
-            { approvals: { some: { approvedById: user.id } } },
-          ],
         },
         include: {
           approvals: {
             orderBy: { createdAt: 'desc' },
             include: {
               approvedBy: {
-                select: { id: true, name: true },
+                select: { id: true, name: true, division: true },
               },
             },
           },
           submittedBy: {
-            select: { id: true, name: true, email: true },
+            select: { id: true, name: true, email: true, division: true },
           },
           contract: {
             select: { contractNumber: true, contractDate: true },
           },
-          versions: { orderBy: { version: 'desc' }, take: 1 },
+          versions: { orderBy: { version: 'asc' } }, // ✅ Include semua versi
         },
         orderBy: { updatedAt: 'desc' },
       });
     }
+
     throw new ForbiddenException('Division not permitted to view history');
   }
 
@@ -1101,5 +1100,94 @@ export class DocumentService {
       filePath: doc.filePath,
       fileName: doc.name || `document-${docId}`,
     };
+  }
+
+  // === GET FILE BY VERSION ===
+  async getDocumentFileByVersion(docId: number, versionId: string, user: any) {
+    // 1. Cek akses dokumen
+    const doc = await this.getById(docId, user);
+
+    if (!doc) {
+      throw new NotFoundException('Document not found');
+    }
+
+    // 2. Cari version spesifik
+    const version = await this.prisma.documentVersion.findUnique({
+      where: { id: versionId },
+    });
+
+    if (!version || version.documentId !== docId) {
+      throw new NotFoundException('Document version not found');
+    }
+
+    // 3. Resolve file path
+    let filePath = version.filePath;
+
+    if (!path.isAbsolute(filePath)) {
+      filePath = path.resolve(process.cwd(), filePath);
+    }
+
+    console.log('🔍 [getDocumentFileByVersion] Looking for file at:', filePath);
+
+    if (!fs.existsSync(filePath)) {
+      throw new NotFoundException('File not found on server');
+    }
+
+    return {
+      filePath,
+      fileName: `${doc.name}_v${version.version}`,
+    };
+  }
+
+  async getHistoryDetail(docId: number, user: any) {
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      include: {
+        submittedBy: {
+          select: { id: true, name: true, email: true, division: true },
+        },
+        reviewedBy: { select: { id: true, name: true, division: true } },
+        contract: { select: { contractNumber: true, contractDate: true } },
+        approvals: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            approvedBy: { select: { id: true, name: true, division: true } },
+          },
+        },
+        versions: {
+          orderBy: { version: 'asc' },
+          include: {
+            uploadedBy: { select: { id: true, name: true, division: true } },
+          },
+        },
+      },
+    });
+
+    if (!doc) {
+      throw new NotFoundException('Document not found');
+    }
+
+    // 🔒 Vendor hanya lihat dokumen mereka sendiri
+    if (user.division === Division.Vendor && doc.submittedById !== user.id) {
+      throw new ForbiddenException(
+        'You are not authorized to view this document',
+      );
+    }
+
+    // Role lain bisa lihat semua (jika dalam finished status)
+    if (
+      ![
+        Division.Vendor,
+        Division.Dalkon,
+        Division.Engineer,
+        Division.Manager,
+      ].includes(user.division)
+    ) {
+      throw new ForbiddenException(
+        'You are not authorized to view this document',
+      );
+    }
+
+    return doc;
   }
 }

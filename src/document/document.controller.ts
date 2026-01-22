@@ -558,4 +558,38 @@ export class DocumentController {
 
     return new StreamableFile(fileStream);
   }
+
+  // === GET FILE BY VERSION (untuk download versi tertentu) ===
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/file/:versionId')
+  async getDocumentFileByVersion(
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @Request() req,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = req.user;
+    if (!user) {
+      throw new ForbiddenException('User not authenticated');
+    }
+
+    const { filePath, fileName } =
+      await this.documentService.getDocumentFileByVersion(+id, versionId, user);
+
+    const fileStream = createReadStream(filePath);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${fileName}.pdf"`,
+    });
+
+    return new StreamableFile(fileStream);
+  }
+
+  // === GET HISTORY DETAIL (dengan semua versions dan approvals) ===
+  @UseGuards(JwtAuthGuard)
+  @Get('history/:id')
+  async getHistoryDetail(@Param('id') id: number, @Request() req) {
+    return this.documentService.getHistoryDetail(+id, req.user);
+  }
 }
