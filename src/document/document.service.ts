@@ -273,6 +273,7 @@ export class DocumentService {
       if (doc.status === Status.submitted && !doc.returnRequestedBy) {
         newStatus = Status.inReviewEngineering;
         logMessage = notes || 'Dalkon forwarded to Engineering';
+        doc.returnRequestedBy = null;
       } else if (
         doc.status === Status.submitted &&
         doc.returnRequestedBy === Division.Engineer
@@ -543,6 +544,7 @@ export class DocumentService {
         status: Status.submitted,
         filePath: filePath || doc.filePath, // Use new file if provided
         latestVersion: doc.latestVersion + 1,
+        returnRequestedBy: null, // ✅ RESET returnRequestedBy agar flow normal kembali
         progress: {
           push: `Vendor: Resubmitted with annotations (v${doc.latestVersion})`,
         },
@@ -630,11 +632,42 @@ export class DocumentService {
       });
     }
 
-    //   ENGINEER - Just see dokumen that in-review Engineering
+    //   ENGINEER - Lihat semua dokumen seperti Dalkon (monitoring semua progress)
     if (user.division === Division.Engineer) {
+      const dalkonUsers = await this.prisma.user.findMany({
+        where: { division: Division.Dalkon },
+        select: { id: true },
+      });
+      const dalkonUserIds = dalkonUsers.map((u) => u.id);
+
       return this.prisma.document.findMany({
         where: {
-          status: Status.inReviewEngineering,
+          status: {
+            notIn: [Status.rejected],
+          },
+          OR: [
+            {
+              //   Semua dokumen submitted (dari Vendor atau dikembalikan dari Engineer/Manager)
+              status: Status.submitted,
+            },
+            {
+              // Approved dari Engineer (bukan final approval Dalkon)
+              AND: [
+                { status: Status.approved },
+                { reviewedById: { notIn: dalkonUserIds } },
+              ],
+            },
+            {
+              // ApprovedWithNotes dari Engineer
+              AND: [
+                { status: Status.approvedWithNotes },
+                { reviewedById: { notIn: dalkonUserIds } },
+              ],
+            },
+            { status: Status.inReviewConsultant }, // Dari Manager, perlu final approval
+            { status: Status.inReviewEngineering }, // Monitoring Engineer
+            { status: Status.inReviewManager }, // Monitoring Manager
+          ],
         },
         include: {
           submittedBy: { select: { id: true, name: true } },
@@ -647,11 +680,42 @@ export class DocumentService {
       });
     }
 
-    //   MANAGER - Hanya lihat dokumen yang sedang di-review Manager
+    //   MANAGER - Lihat semua dokumen seperti Dalkon (monitoring semua progress)
     if (user.division === Division.Manager) {
+      const dalkonUsers = await this.prisma.user.findMany({
+        where: { division: Division.Dalkon },
+        select: { id: true },
+      });
+      const dalkonUserIds = dalkonUsers.map((u) => u.id);
+
       return this.prisma.document.findMany({
         where: {
-          status: Status.inReviewManager,
+          status: {
+            notIn: [Status.rejected],
+          },
+          OR: [
+            {
+              //   Semua dokumen submitted (dari Vendor atau dikembalikan dari Engineer/Manager)
+              status: Status.submitted,
+            },
+            {
+              // Approved dari Engineer (bukan final approval Dalkon)
+              AND: [
+                { status: Status.approved },
+                { reviewedById: { notIn: dalkonUserIds } },
+              ],
+            },
+            {
+              // ApprovedWithNotes dari Engineer
+              AND: [
+                { status: Status.approvedWithNotes },
+                { reviewedById: { notIn: dalkonUserIds } },
+              ],
+            },
+            { status: Status.inReviewConsultant }, // Dari Manager, perlu final approval
+            { status: Status.inReviewEngineering }, // Monitoring Engineer
+            { status: Status.inReviewManager }, // Monitoring Manager
+          ],
         },
         include: {
           submittedBy: { select: { id: true, name: true } },
@@ -867,7 +931,15 @@ export class DocumentService {
 
       // Save PDF
       const pdfBytes = await pdfDoc.save();
-      fs.writeFileSync(filePath, pdfBytes);
+      const newFilename = `annotated-${Date.now()}-${path.basename(document.filePath)}`;
+      const newFilePath = path.join(process.cwd(), 'uploads', newFilename);
+      fs.writeFileSync(newFilePath, pdfBytes);
+
+      // Update database dengan file path baru
+      await this.prisma.document.update({
+        where: { id: docId },
+        data: { filePath: `uploads/${newFilename}` },
+      });
 
       console.log('✅ Annotations saved successfully');
     } catch (error) {
@@ -1003,6 +1075,33 @@ export class DocumentService {
       throw new ForbiddenException(
         'You are not authorized to view this document',
       );
+    }
+
+    // Filter progress untuk Vendor - hanya tampilkan progress yang relevan untuk mereka
+    // Dalkon, Engineer, dan Manager bisa melihat semua progress
+    if (user.division === Division.Vendor) {
+      // Vendor hanya melihat progress yang relevan (submitted, returned, rejected, approved)
+      const vendorRelevantKeywords = [
+        'Submitted by vendor',
+        'Returned',
+        'Rejected',
+        'Final approval',
+        'returned',
+        'rejected',
+        'approved',
+        'correction',
+      ];
+
+      const filteredProgress = doc.progress.filter((p) =>
+        vendorRelevantKeywords.some((keyword) =>
+          p.toLowerCase().includes(keyword.toLowerCase()),
+        ),
+      );
+
+      return {
+        ...doc,
+        progress: filteredProgress,
+      };
     }
 
     return doc;
@@ -1189,5 +1288,50 @@ export class DocumentService {
     }
 
     return doc;
+  }
+
+  async vendorResubmitStatus(userId: number, docId: number) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    if (user.division !== Division.Vendor) {
+      throw new ForbiddenException('Only vendors can resubmit');
+    }
+
+    const doc = await this.prisma.document.findUnique({
+      where: { id: docId },
+      select: {
+        id: true,
+        submittedById: true,
+        status: true,
+        latestVersion: true,
+        filePath: true,
+      },
+    });
+
+    if (!doc) throw new NotFoundException('Document not found');
+
+    if (doc.submittedById !== userId) {
+      throw new ForbiddenException('You did not submit this document');
+    }
+
+    if (doc.status !== Status.returnForCorrection) {
+      throw new BadRequestException(
+        'Document cannot be resubmitted unless status is "returnForCorrection"',
+      );
+    }
+
+    // Update status tanpa upload file (file sudah di-merge via saveAnnotations)
+    return this.prisma.document.update({
+      where: { id: docId },
+      data: {
+        status: Status.submitted,
+        latestVersion: doc.latestVersion + 1,
+        returnRequestedBy: null,
+        progress: {
+          push: `Vendor: Resubmitted with corrections (v${doc.latestVersion + 1})`,
+        },
+      },
+    });
   }
 }

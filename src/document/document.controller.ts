@@ -126,6 +126,16 @@ export class DocumentController {
     return this.documentService.resubmitSimple(req.user.id, +id, filePath);
   }
 
+  @Patch(':id/vendor-resubmit')
+  @UseGuards(JwtAuthGuard)
+  async vendorResubmit(@Request() req, @Param('id') id: number) {
+    if (req.user.division !== Division.Vendor) {
+      throw new ForbiddenException('Only vendors can resubmit');
+    }
+
+    return this.documentService.vendorResubmitStatus(req.user.id, +id);
+  }
+
   // === REVIEW HANDLERS ===
   @Patch(':id/dalkon-review')
   @UseInterceptors(
