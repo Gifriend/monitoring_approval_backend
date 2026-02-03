@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { Division } from '@prisma/client';
 
-jest.mock('bcrypt');
+jest.mock('bcryptjs');
 
 describe('AuthService', () => {
   let service: AuthService;

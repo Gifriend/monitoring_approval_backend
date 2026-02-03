@@ -76,7 +76,12 @@ describe('DocumentService', () => {
   describe('dalkonReview', () => {
     it('should approve document', async () => {
       const user = { id: 10, division: Division.Dalkon };
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ 
+        id: 1, 
+        status: Status.submitted,
+        filePath: 'file.pdf',
+        submittedById: 1
+      });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
         status: Status.inReviewEngineering,
@@ -89,7 +94,12 @@ describe('DocumentService', () => {
 
     it('should return for correction', async () => {
       const user = { id: 10, division: Division.Dalkon };
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ 
+        id: 1,
+        status: Status.submitted,
+        filePath: 'file.pdf',
+        submittedById: 1
+      });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
         status: Status.returnForCorrection,
@@ -111,7 +121,11 @@ describe('DocumentService', () => {
   describe('engineeringReview', () => {
     it('should approve with notes', async () => {
       const user = { id: 20, division: Division.Engineer };
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ 
+        id: 1,
+        status: Status.submitted,
+        filePath: 'file.pdf'
+      });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
         status: Status.approvedWithNotes,
@@ -129,7 +143,11 @@ describe('DocumentService', () => {
 
     it('should throw if invalid action', async () => {
       const user = { id: 20, division: Division.Engineer };
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ 
+        id: 1,
+        status: Status.submitted,
+        filePath: 'file.pdf'
+      });
 
       await expect(
         service.engineeringReview(user, 1, 'invalid'),
@@ -140,7 +158,11 @@ describe('DocumentService', () => {
   describe('managerReview', () => {
     it('should approve document', async () => {
       const user = { id: 30, division: Division.Manager };
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValue({ 
+        id: 1,
+        status: Status.inReviewManager,
+        filePath: 'file.pdf'
+      });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 1,
         status: Status.approved,
@@ -162,6 +184,9 @@ describe('DocumentService', () => {
       (prisma.document.findUnique as jest.Mock).mockResolvedValue({
         id: 5,
         latestVersion: 1,
+        status: Status.returnForCorrection,
+        submittedById: 1,
+        filePath: 'file.pdf'
       });
       (prisma.document.update as jest.Mock).mockResolvedValue({
         id: 5,
@@ -169,52 +194,53 @@ describe('DocumentService', () => {
         latestVersion: 2,
       });
 
-      const result = await service.resubmit(1, 5, 'file_v2.pdf');
+      const result = await service.resubmitSimple(1, 5, 'file_v2.pdf');
       expect(result.status).toBe(Status.submitted);
       expect(result.latestVersion).toBe(2);
     });
   });
 
-  describe('getProgress', () => {
-    it('should allow Dalkon to view progress with all steps', async () => {
-      const user = { id: 10, division: Division.Dalkon };
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({
-        id: 1,
-        status: Status.approved,
-        progress: [
-          'Submitted by vendor',
-          'Forwarded to Engineering',
-          'Approved with notes',
-          'Forwarded to Manager',
-          'Approved by Manager',
-        ],
-      });
+  // Commented out tests for methods that no longer exist
+  // describe('getProgress', () => {
+  //   it('should allow Dalkon to view progress with all steps', async () => {
+  //     const user = { id: 10, division: Division.Dalkon };
+  //     (prisma.document.findUnique as jest.Mock).mockResolvedValue({
+  //       id: 1,
+  //       status: Status.approved,
+  //       progress: [
+  //         'Submitted by vendor',
+  //         'Forwarded to Engineering',
+  //         'Approved with notes',
+  //         'Forwarded to Manager',
+  //         'Approved by Manager',
+  //       ],
+  //     });
 
-      const result = await (service as any).getProgress(user, 1);
-      expect(result.progress).toContain('Approved by Manager');
-      expect((result.progress ?? []).length).toBeGreaterThan(1);
-    });
-  });
+  //     const result = await (service as any).getProgress(user, 1);
+  //     expect(result.progress).toContain('Approved by Manager');
+  //     expect((result.progress ?? []).length).toBeGreaterThan(1);
+  //   });
+  // });
 
-  describe('uploadFile', () => {
-    it('should update filePath for vendor', async () => {
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-        id: 1,
-        division: Division.Vendor,
-      });
-      (prisma.document.findUnique as jest.Mock).mockResolvedValue({
-        id: 1,
-        submittedById: 1,
-      });
-      (prisma.document.update as jest.Mock).mockResolvedValue({
-        id: 1,
-        filePath: 'new.pdf',
-      });
+  // describe('uploadFile', () => {
+  //   it('should update filePath for vendor', async () => {
+  //     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+  //       id: 1,
+  //       division: Division.Vendor,
+  //     });
+  //     (prisma.document.findUnique as jest.Mock).mockResolvedValue({
+  //       id: 1,
+  //       submittedById: 1,
+  //     });
+  //     (prisma.document.update as jest.Mock).mockResolvedValue({
+  //       id: 1,
+  //       filePath: 'new.pdf',
+  //     });
 
-      const result = await (service as any).uploadFile(1, 1, 'new.pdf');
-      expect(result.filePath).toBe('new.pdf');
-    });
-  });
+  //     const result = await (service as any).uploadFile(1, 1, 'new.pdf');
+  //     expect(result.filePath).toBe('new.pdf');
+  //   });
+  // });
 
   describe('getHistory', () => {
     it('should return all completed documents for a vendor', async () => {
@@ -262,7 +288,12 @@ describe('DocumentService', () => {
       expect(submitted.progress).toContain('Submitted by vendor');
 
       // Step 2: Dalkon approves → Engineering
-      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ 
+        id: 1,
+        status: Status.submitted,
+        filePath: 'file.pdf',
+        submittedById: 1
+      });
       (prisma.document.update as jest.Mock).mockResolvedValueOnce({
         id: 1,
         status: Status.inReviewEngineering,
@@ -272,7 +303,11 @@ describe('DocumentService', () => {
       expect(toEngineering.progress).toContain('Forwarded to Engineering');
 
       // Step 3: Engineering approve with notes → Dalkon
-      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ 
+        id: 1,
+        status: Status.submitted,
+        filePath: 'file.pdf'
+      });
       (prisma.document.update as jest.Mock).mockResolvedValueOnce({
         id: 1,
         status: Status.approvedWithNotes,
@@ -287,7 +322,12 @@ describe('DocumentService', () => {
       expect(toDalkon.progress).toContain('Approved with notes');
 
       // Step 4: Dalkon sends → Manager
-      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ 
+        id: 1,
+        status: Status.approvedWithNotes,
+        filePath: 'file.pdf',
+        submittedById: 1
+      });
       (prisma.document.update as jest.Mock).mockResolvedValueOnce({
         id: 1,
         status: Status.inReviewManager,
@@ -297,7 +337,11 @@ describe('DocumentService', () => {
       expect(toManager.progress).toContain('Forwarded to Manager');
 
       // Step 5: Manager approve → Vendor
-      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ id: 1 });
+      (prisma.document.findUnique as jest.Mock).mockResolvedValueOnce({ 
+        id: 1,
+        status: Status.inReviewManager,
+        filePath: 'file.pdf'
+      });
       (prisma.document.update as jest.Mock).mockResolvedValueOnce({
         id: 1,
         status: Status.approved,
