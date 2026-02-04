@@ -19,47 +19,23 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from './document.service';
+import { SupabaseService } from '../supabase/supabase.service';
 import { JwtAuthGuard } from '../auth/strategy/jwt-auth.guard';
 import { ApprovalType, Division } from '@prisma/client';
-import { diskStorage } from 'multer';
-import { extname, resolve } from 'path';
+import { extname } from 'path';
 import type { Response } from 'express';
-import { createReadStream, existsSync, mkdirSync } from 'fs';
-
-// Helper untuk memastikan folder 'uploads' ada di root proyek
-const ensureUploadsDir = () => {
-  // path.resolve(process.cwd(), 'uploads') akan membuat path absolut
-  // seperti /home/user/proyek-nestjs/uploads
-  const uploadPath = resolve(process.cwd(), 'uploads');
-  if (!existsSync(uploadPath)) {
-    mkdirSync(uploadPath, { recursive: true });
-  }
-  return uploadPath;
-};
 
 @Controller('documents')
 @UseGuards(JwtAuthGuard)
 export class DocumentController {
-  constructor(private readonly documentService: DocumentService) {}
+  constructor(
+    private readonly documentService: DocumentService,
+    private readonly supabaseService: SupabaseService,
+  ) {}
 
   // === UPLOAD & SUBMIT DOKUMEN ===
   @Post('submit')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, file, callback) => {
-          const uploadPath = ensureUploadsDir();
-          callback(null, uploadPath);
-        },
-        filename: (req, file, callback) => {
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   @HttpCode(HttpStatus.CREATED)
   async submit(
     @Request() req,
@@ -67,7 +43,7 @@ export class DocumentController {
     body: {
       name: string;
       contractNumber?: string;
-      contractDate?: string; // <--- Tambahkan ini (terima sebagai string dari FormData)
+      contractDate?: string;
       documentType: string;
     },
     @UploadedFile() file?: Express.Multer.File,
@@ -82,14 +58,21 @@ export class DocumentController {
       );
     }
 
-    const filePath = `uploads/${file.filename}`;
+    // Upload ke Supabase
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `${file.fieldname}-${uniqueSuffix}${ext}`;
+
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
 
     return this.documentService.submit(req.user.id, {
       name: body.name,
-      filePath,
+      filePath: uploadResult.path,
       contractNumber: body.contractNumber,
-      // Konversi string tanggal dari FormData ke object Date
-      // Jika kosong, gunakan null atau undefined
       contractDate: body.contractDate ? new Date(body.contractDate) : undefined,
       documentType: body.documentType as ApprovalType,
     });
@@ -97,23 +80,7 @@ export class DocumentController {
 
   // === RESUBMIT (upload ulang file revisi) ===
   @Patch(':id/resubmit')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        //   PERBAIKAN: Simpan ke folder 'uploads' di root proyek
-        destination: (req, file, callback) => {
-          const uploadPath = ensureUploadsDir();
-          callback(null, uploadPath);
-        },
-        filename: (req, file, callback) => {
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          const ext = extname(file.originalname);
-          callback(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async resubmit(
     @Request() req,
     @Param('id') id: number,
@@ -122,8 +89,23 @@ export class DocumentController {
     if (!file) {
       throw new BadRequestException('File is required for resubmission');
     }
-    const filePath = `uploads/${file.filename}`;
-    return this.documentService.resubmitSimple(req.user.id, +id, filePath);
+
+    // Upload ke Supabase
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `resubmit-${uniqueSuffix}${ext}`;
+
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
+
+    return this.documentService.resubmitSimple(
+      req.user.id,
+      +id,
+      uploadResult.path,
+    );
   }
 
   @Patch(':id/vendor-resubmit')
@@ -138,33 +120,18 @@ export class DocumentController {
 
   // === REVIEW HANDLERS ===
   @Patch(':id/dalkon-review')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: () => ensureUploadsDir(),
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async dalkonReview(
     @Request() req,
     @Param('id') id: number,
     @UploadedFile() file?: Express.Multer.File,
   ) {
-    //   Debug logging untuk troubleshooting
     console.log(' [Dalkon] req.body =', req.body);
     console.log(' [Dalkon] file =', file?.originalname);
 
-    // Take from req.body because using
-    //
-    FormData;
     const action = req.body?.action;
     const notes = req.body?.notes;
 
-    // Parse annotations using try/catch
     let annotations: any[] | undefined;
     if (req.body?.annotations) {
       try {
@@ -174,9 +141,22 @@ export class DocumentController {
       }
     }
 
-    // Validate field
     if (!action) {
       throw new BadRequestException('Action is required');
+    }
+
+    let uploadedFilePath: string | undefined;
+    if (file) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const ext = extname(file.originalname);
+      const fileName = `annotated-dalkon-${uniqueSuffix}${ext}`;
+
+      const uploadResult = await this.supabaseService.uploadFile(
+        file.buffer,
+        fileName,
+        'documents',
+      );
+      uploadedFilePath = uploadResult.path;
     }
 
     return this.documentService.dalkonReview(
@@ -185,23 +165,13 @@ export class DocumentController {
       action,
       notes,
       annotations,
-      file ? `uploads/${file.filename}` : undefined,
+      uploadedFilePath,
     );
   }
 
   // ENGINEERING REVIEW
   @Patch(':id/engineering-review')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: () => ensureUploadsDir(),
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async engineeringReview(
     @Request() req,
     @Param('id') id: number,
@@ -210,11 +180,9 @@ export class DocumentController {
     console.log('  [Engineering] req.body =', req.body);
     console.log('  [Engineering] file =', file?.originalname);
 
-    // Take from req.body because using formdata
     const action = req.body?.action;
     const notes = req.body?.notes;
 
-    // Parse annotations dengan try/catch
     let annotations: any[] | undefined;
     if (req.body?.annotations) {
       try {
@@ -224,9 +192,22 @@ export class DocumentController {
       }
     }
 
-    // Validasi field wajib
     if (!action) {
       throw new BadRequestException('Action is required');
+    }
+
+    let uploadedFilePath: string | undefined;
+    if (file) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const ext = extname(file.originalname);
+      const fileName = `annotated-engineer-${uniqueSuffix}${ext}`;
+
+      const uploadResult = await this.supabaseService.uploadFile(
+        file.buffer,
+        fileName,
+        'documents',
+      );
+      uploadedFilePath = uploadResult.path;
     }
 
     return this.documentService.engineeringReview(
@@ -235,37 +216,24 @@ export class DocumentController {
       action,
       notes,
       annotations,
-      file ? `uploads/${file.filename}` : undefined,
+      uploadedFilePath,
     );
   }
 
   // MANAGER REVIEW
   @Patch(':id/manager-review')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: () => ensureUploadsDir(),
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async managerReview(
     @Request() req,
     @Param('id') id: number,
     @UploadedFile() file?: Express.Multer.File,
   ) {
-    //   Debug logging untuk troubleshooting
     console.log('  [Manager] req.body =', req.body);
     console.log('  [Manager] file =', file?.originalname);
 
-    //   Ambil dari req.body langsung karena FormData
     const action = req.body?.action;
     const notes = req.body?.notes;
 
-    //   Parse annotations dengan try/catch
     let annotations: any[] | undefined;
     if (req.body?.annotations) {
       try {
@@ -275,9 +243,22 @@ export class DocumentController {
       }
     }
 
-    //   Validasi field wajib
     if (!action) {
       throw new BadRequestException('Action is required');
+    }
+
+    let uploadedFilePath: string | undefined;
+    if (file) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const ext = extname(file.originalname);
+      const fileName = `annotated-manager-${uniqueSuffix}${ext}`;
+
+      const uploadResult = await this.supabaseService.uploadFile(
+        file.buffer,
+        fileName,
+        'documents',
+      );
+      uploadedFilePath = uploadResult.path;
     }
 
     return this.documentService.managerReview(
@@ -286,46 +267,39 @@ export class DocumentController {
       action,
       notes,
       annotations,
-      file ? `uploads/${file.filename}` : undefined,
+      uploadedFilePath,
     );
   }
 
   @Patch(':id/resubmit-annotated')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: () => ensureUploadsDir(),
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async resubmitAnnotated(
     @Request() req,
     @Param('id') id: number,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
     if (!file) throw new BadRequestException('File required');
-    const filePath = `uploads/${file.filename}`;
-    // Pakai logic resubmit yang sudah ada
-    return this.documentService.resubmitSimple(req.user.id, +id);
+    
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `annotated-resubmit-${uniqueSuffix}${ext}`;
+
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
+
+    return this.documentService.resubmitSimple(
+      req.user.id,
+      +id,
+      uploadResult.path,
+    );
   }
 
   // === VENDOR REVIEW (SUBMIT REVISION) ===
   @Patch(':id/vendor-review')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: () => ensureUploadsDir(),
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `vendor-revision-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async vendorReview(
     @Request() req,
     @Param('id') id: number,
@@ -334,19 +308,16 @@ export class DocumentController {
     console.log('📤 [Vendor] req.body =', req.body);
     console.log('📄 [Vendor] file =', file?.originalname);
 
-    // Validasi user adalah vendor
     if (req.user.division !== Division.Vendor) {
       throw new ForbiddenException('Only vendors can submit revisions');
     }
 
-    // Validasi file wajib ada
     if (!file) {
       throw new BadRequestException('File is required for vendor revision');
     }
 
     const action = req.body?.action;
 
-    // Parse annotations jika ada
     let annotations: any[] | undefined;
     if (req.body?.annotations) {
       try {
@@ -356,15 +327,25 @@ export class DocumentController {
       }
     }
 
-    // Untuk vendor, action harus 'submit_revision'
     if (action !== 'submit_revision') {
       throw new BadRequestException('Invalid action for vendor review');
     }
 
-    const filePath = `uploads/${file.filename}`;
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `vendor-revision-${uniqueSuffix}${ext}`;
 
-    // Call service method untuk resubmit
-    return this.documentService.resubmitSimple(req.user.id, +id);
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
+
+    return this.documentService.resubmitSimple(
+      req.user.id,
+      +id,
+      uploadResult.path,
+    );
   }
 
   @Get('vendor/pending-correction')
@@ -375,24 +356,11 @@ export class DocumentController {
 
   // ✅ TAMBAHKAN endpoint baru khusus untuk file upload
   @Patch(':id/dalkon-review-upload')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, file, callback) => {
-          const uploadPath = ensureUploadsDir();
-          callback(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `dalkon-annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async dalkonReviewWithUpload(
     @Request() req,
     @Param('id') id: number,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
     console.log('📤 [Dalkon Review Upload] req.body =', req.body);
     console.log('📤 [Dalkon Review Upload] file =', file?.originalname);
@@ -408,35 +376,32 @@ export class DocumentController {
       throw new BadRequestException('Action is required');
     }
 
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `dalkon-annotated-${uniqueSuffix}${ext}`;
+
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
+
     return this.documentService.dalkonReview(
       req.user,
       +id,
       action,
       notes,
-      undefined, // No annotations from JSON
-      `uploads/${file.filename}`,
+      undefined,
+      uploadResult.path,
     );
   }
 
   @Patch(':id/engineering-review-upload')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, file, callback) => {
-          const uploadPath = ensureUploadsDir();
-          callback(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `engineer-annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async engineeringReviewWithUpload(
     @Request() req,
     @Param('id') id: number,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
     console.log('📤 [Engineering Review Upload] req.body =', req.body);
     console.log('📤 [Engineering Review Upload] file =', file?.originalname);
@@ -452,35 +417,32 @@ export class DocumentController {
       throw new BadRequestException('Action is required');
     }
 
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `engineer-annotated-${uniqueSuffix}${ext}`;
+
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
+
     return this.documentService.engineeringReview(
       req.user,
       +id,
       action,
       notes,
       undefined,
-      `uploads/${file.filename}`,
+      uploadResult.path,
     );
   }
 
   @Patch(':id/manager-review-upload')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, file, callback) => {
-          const uploadPath = ensureUploadsDir();
-          callback(null, uploadPath);
-        },
-        filename: (req, file, cb) => {
-          const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `manager-annotated-${unique}${extname(file.originalname)}`);
-        },
-      }),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file'))
   async managerReviewWithUpload(
     @Request() req,
     @Param('id') id: number,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
     console.log('📤 [Manager Review Upload] req.body =', req.body);
     console.log('📤 [Manager Review Upload] file =', file?.originalname);
@@ -496,13 +458,23 @@ export class DocumentController {
       throw new BadRequestException('Action is required');
     }
 
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = extname(file.originalname);
+    const fileName = `manager-annotated-${uniqueSuffix}${ext}`;
+
+    const uploadResult = await this.supabaseService.uploadFile(
+      file.buffer,
+      fileName,
+      'documents',
+    );
+
     return this.documentService.managerReview(
       req.user,
       +id,
       action,
       notes,
       undefined,
-      `uploads/${file.filename}`,
+      uploadResult.path,
     );
   }
 
@@ -539,7 +511,7 @@ export class DocumentController {
     return this.documentService.getById(+id, req.user);
   }
 
-  // === GET FILE (ENDPOINT PREVIEW/DOWNLOAD) ===
+  // === GET FILE (ENDPOINT PREVIEW/DOWNLOAD) - Updated for Supabase ===
   @UseGuards(JwtAuthGuard)
   @Get(':id/file')
   async getDocumentFile(
@@ -552,24 +524,18 @@ export class DocumentController {
       throw new ForbiddenException('User not authenticated');
     }
 
-    // Service akan memanggil path.resolve(process.cwd(), 'uploads/filename.pdf')
-    // Ini sekarang sudah BENAR karena file ada di sana.
-    const { filePath, fileName } = await this.documentService.getDocumentFile(
-      +id,
-      user,
-    );
-
-    const fileStream = createReadStream(filePath);
+    const { fileBuffer, fileName, contentType } =
+      await this.documentService.getDocumentFile(+id, user);
 
     res.set({
-      'Content-Type': 'application/pdf',
+      'Content-Type': contentType,
       'Content-Disposition': `inline; filename="${fileName}.pdf"`,
     });
 
-    return new StreamableFile(fileStream);
+    return new StreamableFile(fileBuffer);
   }
 
-  // === GET FILE BY VERSION (untuk download versi tertentu) ===
+  // === GET FILE BY VERSION (untuk download versi tertentu) - Updated for Supabase ===
   @UseGuards(JwtAuthGuard)
   @Get(':id/file/:versionId')
   async getDocumentFileByVersion(
@@ -583,17 +549,15 @@ export class DocumentController {
       throw new ForbiddenException('User not authenticated');
     }
 
-    const { filePath, fileName } =
+    const { fileBuffer, fileName, contentType } =
       await this.documentService.getDocumentFileByVersion(+id, versionId, user);
 
-    const fileStream = createReadStream(filePath);
-
     res.set({
-      'Content-Type': 'application/pdf',
+      'Content-Type': contentType,
       'Content-Disposition': `inline; filename="${fileName}.pdf"`,
     });
 
-    return new StreamableFile(fileStream);
+    return new StreamableFile(fileBuffer);
   }
 
   // === GET HISTORY DETAIL (dengan semua versions dan approvals) ===

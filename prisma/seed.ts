@@ -100,7 +100,7 @@ async function main() {
   const doc1 = await prisma.document.create({
     data: {
       name: "Dokumen Baru (untuk Dalkon)",
-      filePath: "uploads/test.pdf",
+      filePath: "documents/test.pdf",
       latestVersion: 1, //   FIX: Sesuai schema
       status: Status.submitted, //   FIX: Menggunakan Enum
       progress: ["Submitted by vendor"], //   FIX: Sesuai schema (array)
@@ -112,7 +112,7 @@ async function main() {
       versions: {
         //   FIX: Buat catatan versi awal
         create: {
-          filePath: "uploads/doc1.pdf",
+          filePath: "documents/doc1.pdf",
           version: 1,
           uploadedById: vendor.id,
         },
@@ -123,7 +123,7 @@ async function main() {
   const doc2 = await prisma.document.create({
     data: {
       name: "Dokumen Review Engineer (untuk Engineer)",
-      filePath: "uploads/test2.pdf",
+      filePath: "documents/test2.pdf",
       latestVersion: 1,
       status: Status.inReviewEngineering, //   FIX: Menggunakan Enum
       progress: ["Submitted by vendor", "Forwarded to Engineering"],
@@ -135,7 +135,7 @@ async function main() {
       remarks: "Awaiting Engineer review",
       versions: {
         create: {
-          filePath: "uploads/doc2.pdf",
+          filePath: "documents/doc2.pdf",
           version: 1,
           uploadedById: vendor.id,
         },
@@ -146,7 +146,7 @@ async function main() {
   const doc3 = await prisma.document.create({
     data: {
       name: "Dokumen Disetujui (untuk histori)",
-      filePath: "uploads/test3_v2.pdf", // File v2 adalah yang terbaru
+      filePath: "documents/test3_v2.pdf", // File v2 adalah yang terbaru
       latestVersion: 2, //   FIX: Versi terbaru adalah 2
       status: Status.approved, //   FIX: Menggunakan Enum
       progress: [
@@ -166,12 +166,12 @@ async function main() {
         //   FIX: Buat 2 catatan versi
         create: [
           {
-            filePath: "uploads/test3_v1.pdf",
+            filePath: "documents/test3_v1.pdf",
             version: 1,
             uploadedById: vendor2.id,
           },
           {
-            filePath: "uploads/test3_v2.pdf",
+            filePath: "documents/test3_v2.pdf",
             version: 2,
             uploadedById: vendor2.id,
           },
@@ -183,7 +183,7 @@ async function main() {
   const doc4 = await prisma.document.create({
     data: {
       name: "Dokumen Dikembalikan (untuk Vendor/Dalkon)",
-      filePath: "uploads/test4.pdf",
+      filePath: "documents/test4.pdf",
       latestVersion: 1,
       status: Status.returnForCorrection, //   FIX: Menggunakan Enum
       progress: [
@@ -199,7 +199,7 @@ async function main() {
       remarks: "Perlu revisi perhitungan di hal. 5",
       versions: {
         create: {
-          filePath: "uploads/test4.pdf",
+          filePath: "documents/test4.pdf",
           version: 1,
           uploadedById: vendor2.id,
         },
@@ -210,7 +210,7 @@ async function main() {
   const doc5 = await prisma.document.create({
     data: {
       name: "Dokumen Ditolak (untuk histori)",
-      filePath: "uploads/doc5.pdf",
+      filePath: "documents/doc5.pdf",
       latestVersion: 1,
       status: Status.rejected, //   FIX: Menggunakan Enum
       progress: ["Submitted by vendor", "Rejected by Dalkon"],
@@ -222,7 +222,7 @@ async function main() {
       remarks: "Rencana ini sudah tidak relevan.",
       versions: {
         create: {
-          filePath: "uploads/doc5.pdf",
+          filePath: "documents/doc5.pdf",
           version: 1,
           uploadedById: vendor.id,
         },

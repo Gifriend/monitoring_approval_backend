@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import * as fs from 'fs';
+import { SupabaseService } from '../supabase/supabase.service';
 import * as path from 'path';
 import { ApprovalType, Division, Status } from '@prisma/client';
 import { PDFDocument, rgb } from 'pdf-lib';
@@ -13,7 +13,10 @@ import { createCanvas, loadImage } from 'canvas';
 
 @Injectable()
 export class DocumentService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private supabaseService: SupabaseService,
+  ) {}
 
   // Ganti method mergeAnnotationsToPdf
   private async mergeAnnotationsToPdf(
@@ -28,17 +31,8 @@ export class DocumentService {
       throw new NotFoundException('Document not found');
     }
 
-    const filePath = path.join(
-      process.cwd(),
-      'uploads',
-      path.basename(document.filePath),
-    );
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('File not found on server');
-    }
-
-    const existingPdfBytes = fs.readFileSync(filePath);
+    // Download file dari Supabase Storage
+    const existingPdfBytes = await this.supabaseService.downloadFile(document.filePath);
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const pages = pdfDoc.getPages();
 
@@ -120,11 +114,15 @@ export class DocumentService {
     const newFilename = `annotated-${Date.now()}-${path.basename(
       document.filePath,
     )}`;
-    const newFilePath = path.join(process.cwd(), 'uploads', newFilename);
 
-    fs.writeFileSync(newFilePath, pdfBytes);
+    // Upload file yang sudah di-annotate ke Supabase Storage
+    const uploadResult = await this.supabaseService.uploadFile(
+      Buffer.from(pdfBytes),
+      newFilename,
+      'documents',
+    );
 
-    return `uploads/${newFilename}`;
+    return uploadResult.path;
   }
 
   // === SUBMIT (v1) ===
@@ -821,24 +819,14 @@ export class DocumentService {
       throw new NotFoundException('Document not found');
     }
 
-    // Resolve absolute path
-    const filePath = path.isAbsolute(document.filePath)
-      ? document.filePath
-      : path.join(process.cwd(), document.filePath);
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException(`File not found at path: ${filePath}`);
-    }
-
     console.log('💾 Saving annotations to PDF:', {
       docId,
-      filePath,
       annotationsCount: annotations.length,
     });
 
     try {
-      // Load PDF
-      const existingPdfBytes = fs.readFileSync(filePath);
+      // Load PDF dari Supabase Storage
+      const existingPdfBytes = await this.supabaseService.downloadFile(document.filePath);
       const pdfDoc = await PDFDocument.load(existingPdfBytes);
       const pages = pdfDoc.getPages();
 
@@ -929,16 +917,20 @@ export class DocumentService {
         });
       }
 
-      // Save PDF
+      // Save PDF ke Supabase Storage
       const pdfBytes = await pdfDoc.save();
       const newFilename = `annotated-${Date.now()}-${path.basename(document.filePath)}`;
-      const newFilePath = path.join(process.cwd(), 'uploads', newFilename);
-      fs.writeFileSync(newFilePath, pdfBytes);
+      
+      const uploadResult = await this.supabaseService.uploadFile(
+        Buffer.from(pdfBytes),
+        newFilename,
+        'documents',
+      );
 
       // Update database dengan file path baru
       await this.prisma.document.update({
         where: { id: docId },
-        data: { filePath: `uploads/${newFilename}` },
+        data: { filePath: uploadResult.path },
       });
 
       console.log('✅ Annotations saved successfully');
@@ -1138,7 +1130,7 @@ export class DocumentService {
     });
   }
 
-  // === GET FILE (BARU) ===
+  // === GET FILE (UPDATED untuk Supabase) ===
   async getDocumentFile(docId: number, user: any) {
     // 1. Ambil data dokumen (termasuk otorisasi)
     const doc = await this.getById(docId, user);
@@ -1147,38 +1139,17 @@ export class DocumentService {
       throw new NotFoundException('Document does not have a file path');
     }
 
-    let filePath: string;
-
-    let normalizedPath = doc.filePath;
-
-    if (normalizedPath.startsWith('/') || normalizedPath.startsWith('\\')) {
-      normalizedPath = normalizedPath.slice(1);
+    // 2. Download file dari Supabase
+    try {
+      const fileBuffer = await this.supabaseService.downloadFile(doc.filePath);
+      return {
+        fileBuffer,
+        fileName: doc.name,
+        contentType: 'application/pdf',
+      };
+    } catch (error) {
+      throw new NotFoundException(`File not found in storage: ${error.message}`);
     }
-
-    // Check if it's a Windows absolute path (has drive letter like D:\)
-    if (path.isAbsolute(normalizedPath) && /^[a-zA-Z]:/.test(normalizedPath)) {
-      // Already absolute Windows path
-      filePath = normalizedPath;
-    } else {
-      // Relative path - resolve from project root
-      filePath = path.resolve(process.cwd(), normalizedPath);
-    }
-
-    console.log('🔍 [getDocumentFile] Looking for file at:', filePath);
-
-    // 3. Cek apakah file ada
-    if (!fs.existsSync(filePath)) {
-      console.error(`❌ File not found at path: ${filePath}`);
-      console.error(`   process.cwd() is: ${process.cwd()}`);
-      console.error(`   doc.filePath from DB is: ${doc.filePath}`);
-      throw new NotFoundException('File not found on server. Check logs.');
-    }
-
-    // 4. Kembalikan path dan nama file
-    return {
-      filePath,
-      fileName: doc.name,
-    };
   }
 
   async getDocumentFileForUser(docId: number, user: any) {
@@ -1191,17 +1162,20 @@ export class DocumentService {
       throw new NotFoundException('Dokumen atau file tidak ditemukan');
     }
 
-    // if (user.division === Division.Vendor && doc.submittedById !== user.id) {
-    //   throw new ForbiddenException('Akses ditolak');
-    // }
-
-    return {
-      filePath: doc.filePath,
-      fileName: doc.name || `document-${docId}`,
-    };
+    // Download dari Supabase
+    try {
+      const fileBuffer = await this.supabaseService.downloadFile(doc.filePath);
+      return {
+        fileBuffer,
+        fileName: doc.name || `document-${docId}`,
+        contentType: 'application/pdf',
+      };
+    } catch (error) {
+      throw new NotFoundException(`File not found in storage: ${error.message}`);
+    }
   }
 
-  // === GET FILE BY VERSION ===
+  // === GET FILE BY VERSION (UPDATED untuk Supabase) ===
   async getDocumentFileByVersion(docId: number, versionId: string, user: any) {
     // 1. Cek akses dokumen
     const doc = await this.getById(docId, user);
@@ -1219,23 +1193,19 @@ export class DocumentService {
       throw new NotFoundException('Document version not found');
     }
 
-    // 3. Resolve file path
-    let filePath = version.filePath;
-
-    if (!path.isAbsolute(filePath)) {
-      filePath = path.resolve(process.cwd(), filePath);
+    // 3. Download dari Supabase
+    try {
+      const fileBuffer = await this.supabaseService.downloadFile(
+        version.filePath,
+      );
+      return {
+        fileBuffer,
+        fileName: `${doc.name}_v${version.version}`,
+        contentType: 'application/pdf',
+      };
+    } catch (error) {
+      throw new NotFoundException(`File not found in storage: ${error.message}`);
     }
-
-    console.log('🔍 [getDocumentFileByVersion] Looking for file at:', filePath);
-
-    if (!fs.existsSync(filePath)) {
-      throw new NotFoundException('File not found on server');
-    }
-
-    return {
-      filePath,
-      fileName: `${doc.name}_v${version.version}`,
-    };
   }
 
   async getHistoryDetail(docId: number, user: any) {
