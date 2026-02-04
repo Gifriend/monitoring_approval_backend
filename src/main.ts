@@ -17,6 +17,15 @@ async function bootstrap() {
 
   app.enableCors(cors);
   app.useGlobalInterceptors(new LoggingInterceptor());
-  await app.listen(process.env.PORT ?? 3030);
+  
+  const port = process.env.PORT || 3030;
+  await app.listen(port);
+  
+  console.log(`Application is running on port ${port}`);
 }
-bootstrap();
+
+bootstrap().catch((err) => {
+  console.error('Failed to start application:', err);
+  process.exit(1);
+});
+
